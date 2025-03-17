@@ -64,6 +64,9 @@ class LLVMGenerator:
             if node.name == "print":
                 print_values = [self.gen_node(arg) for arg in node.args]
                 self.create_print(*print_values)  # **支援多個變數輸出**
+            elif node.name == "println":
+                print_values = [self.gen_node(arg) for arg in node.args]
+                self.create_print(*print_values, newline=True)  # **支援多個變數輸出**
         elif isinstance(node, UnaryOp):
             operand = self.gen_node(node.operand)
             if node.op == "!":
@@ -71,14 +74,14 @@ class LLVMGenerator:
             elif node.op == "-":
                 return self.builder.neg(operand, name="negtmp")  # **處理負數**
 
-    def create_print(self, *args):
+    def create_print(self, *args, newline=False):
         """建立 `printf` 呼叫來輸出數字"""
         printf_type = ir.FunctionType(ir.IntType(32), [ir.PointerType(ir.IntType(8))], var_arg=True)
         printf_func = ir.Function(self.module, printf_type, name="printf")
         printf_func.linkage = "external"
 
         # 建立格式化字串
-        format_str = "%d " * len(args) + "\n\0"
+        format_str = "%d " * len(args) + ("\n" if newline else"") + "\0"
         format_str_type = ir.ArrayType(ir.IntType(8), len(format_str))
         global_format_str = ir.GlobalVariable(self.module, format_str_type, name="format_str")
         global_format_str.linkage = "internal"
