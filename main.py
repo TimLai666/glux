@@ -42,11 +42,8 @@ def execute_llvm_ir(llvm_ir):
 
 
 if __name__ == "__main__":
-    # 產生 LLVM IR
-    code = """
-    a := -400
-    print(a - 3)
-    """
+    with open("test/main.glux", "r") as file:
+        code = file.read()
 
     tokens = lexer(code)
     print(tokens)  # 先打印 Token，確認正確
