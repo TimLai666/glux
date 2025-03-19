@@ -49,35 +49,27 @@ class Parser:
             return ast_nodes.Module([])
     
     def declaration(self) -> ast_nodes.Declaration:
-        """
-        解析聲明
-        
-        Returns:
-            聲明 AST 節點
-        """
-        # 解析函數聲明
+        """解析聲明語句"""
+        # 嘗試各種聲明語句
         if self.match(TokenType.FN):
             return self.function_declaration()
         
-        # 解析結構體聲明
         if self.match(TokenType.STRUCT):
             return self.struct_declaration()
-        
-        # 解析枚舉聲明
+            
         if self.match(TokenType.ENUM):
             return self.enum_declaration()
-        
-        # 解析變量聲明
+            
+        if self.match(TokenType.IMPORT):
+            return self.import_declaration()
+            
         if self.peek().type == TokenType.IDENTIFIER and self.peek_next().type == TokenType.COLONEQ:
             return self.var_declaration()
-        
-        # 解析常量聲明
+            
         if self.match(TokenType.CONST):
             return self.const_declaration()
-        
-        # 其他類型的聲明...
-        
-        # 默認為表達式語句
+            
+        # 不是聲明語句，嘗試解析陳述句
         return self.statement()
     
     def function_declaration(self) -> ast_nodes.FunctionDeclaration:
@@ -922,6 +914,43 @@ class Parser:
         body = self.block_statement()
         
         return ast_nodes.LambdaExpression(parameters, return_type, body)
+    
+    def import_declaration(self):
+        """解析 import 語句"""
+        from_module = None
+        
+        # 處理 from ... import ... 結構
+        if self.match(TokenType.FROM):
+            # 解析模組路徑
+            module_path = []
+            
+            # 第一個標識符
+            module_path.append(self.consume(TokenType.IDENTIFIER, "期望模組名稱").lexeme)
+            
+            # 處理 a.b.c 形式的路徑
+            while self.match(TokenType.DOT):
+                module_path.append(self.consume(TokenType.IDENTIFIER, "期望模組名稱").lexeme)
+            
+            from_module = ".".join(module_path)
+            
+            # 必須存在 import 關鍵字
+            self.consume(TokenType.IMPORT, "期望 'import' 關鍵字")
+        
+        # 解析要導入的內容
+        imports = []
+        
+        # 第一個導入元素
+        imports.append(self.consume(TokenType.IDENTIFIER, "期望導入項目名稱").lexeme)
+        
+        # 處理多個導入項 (import a, b, c)
+        while self.match(TokenType.COMMA):
+            imports.append(self.consume(TokenType.IDENTIFIER, "期望導入項目名稱").lexeme)
+        
+        # 如果有分號，消耗它
+        self.match(TokenType.SEMICOLON)
+        
+        # 創建並返回 ImportDeclaration 節點
+        return ast_nodes.ImportDeclaration(from_module, imports)
     
     # 輔助方法
     

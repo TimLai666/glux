@@ -21,6 +21,7 @@ class SymbolKind(Enum):
     CONST = auto()        # 常量
     NAMESPACE = auto()    # 命名空間
     MODULE = auto()       # 模塊
+    IMPORTED = auto()     # 導入的符號
     UNKNOWN = auto()      # 未知
 
 
@@ -565,4 +566,20 @@ class SymbolTable:
     
     def is_in_unsafe_block(self) -> bool:
         """檢查是否在 unsafe 區塊中"""
-        return self.unsafe_block_depth > 0 
+        return self.unsafe_block_depth > 0
+    
+    def add_import(self, module_path: str, items: List[str] = None) -> None:
+        """
+        添加導入記錄
+        
+        Args:
+            module_path: 模塊路徑
+            items: 導入的項目列表
+        """
+        if not hasattr(self, 'imports'):
+            self.imports = []
+        
+        self.imports.append({
+            'module_path': module_path,
+            'items': items or []
+        }) 

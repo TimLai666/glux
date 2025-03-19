@@ -937,4 +937,35 @@ class LambdaExpression(Expression):
     def __str__(self):
         params_str = ", ".join(str(param) for param in self.parameters)
         return_type_str = f" -> {self.return_type}" if self.return_type else ""
-        return f"fn({params_str}){return_type_str} {self.body}" 
+        return f"fn({params_str}){return_type_str} {self.body}"
+
+
+class ImportDeclaration(Declaration):
+    """
+    導入聲明節點
+    表示 import 語句
+    """
+    
+    def __init__(self, module_path, imported_items):
+        """
+        初始化導入聲明節點
+        
+        Args:
+            module_path: 導入的模組路徑 (如果是from導入則不為None)
+            imported_items: 導入的項目列表
+        """
+        super().__init__()
+        self.module_path = module_path  # from 部分，可能為 None
+        self.imported_items = imported_items  # 導入的項目列表
+        
+    def accept(self, visitor):
+        """
+        接受訪問者
+        
+        Args:
+            visitor: 訪問者
+            
+        Returns:
+            訪問結果
+        """
+        return visitor.visit_import_declaration(self) 

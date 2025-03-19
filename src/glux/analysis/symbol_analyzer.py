@@ -354,9 +354,32 @@ class SymbolAnalyzer:
         Args:
             import_decl: 導入宣告節點
         """
-        # 導入模塊的處理將在語義分析器中完成
-        # 這裡僅記錄導入的模塊名
-        self.symbol_table.add_import(import_decl.module_path)
+        # 在當前作用域記錄導入的符號
+        if import_decl.module_path:
+            # 處理 from ... import ... 語句
+            for item in import_decl.imported_items:
+                # 把導入的符號添加到符號表
+                self.symbol_table.define(
+                    item,
+                    SymbolKind.IMPORTED,
+                    None,  # 類型會在類型檢查階段確定
+                    is_mutable=False,
+                    is_initialized=True,
+                    module_path=import_decl.module_path
+                )
+                self.defined_symbols.add(item)
+        else:
+            # 處理 import ... 語句
+            for item in import_decl.imported_items:
+                # 記錄導入模塊名
+                self.symbol_table.define(
+                    item,
+                    SymbolKind.MODULE,
+                    None,
+                    is_mutable=False,
+                    is_initialized=True
+                )
+                self.defined_symbols.add(item)
     
     def _analyze_statement(self, stmt):
         """
@@ -533,9 +556,28 @@ class SymbolAnalyzer:
         # 分析被調用對象
         self._analyze_expression(expr.callee)
         
+        # 檢查是否調用內建函數
+        if isinstance(expr.callee, ast_nodes.Variable):
+            if expr.callee.name in self._get_built_in_functions():
+                # 內建函數無需在符號表中定義，但標記為已使用
+                self.used_symbols.add(expr.callee.name)
+        
         # 分析參數
         for arg in expr.arguments:
             self._analyze_expression(arg)
+    
+    def _get_built_in_functions(self) -> set:
+        """
+        獲取內建函數列表
+        
+        Returns:
+            內建函數名稱集合
+        """
+        return {
+            "print", "println", "len", "sleep", "copy", 
+            "error", "is_error", "string", "int", "float",
+            "bool"
+        }
     
     def _analyze_assignment_expr(self, expr: ast_nodes.AssignmentExpr):
         """

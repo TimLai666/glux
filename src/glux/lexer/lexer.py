@@ -24,13 +24,16 @@ class TokenType(Enum):
     FLOAT = auto()
     FN = auto()
     FOR = auto()
+    FROM = auto()     # from 關鍵字
     IF = auto()
+    IMPORT = auto()   # import 關鍵字
     IN = auto()
     INT = auto()
     INTERFACE = auto()
     IS_ERROR = auto()
     LEN = auto()
     LIST = auto()
+    MAIN = auto()     # main 關鍵字
     MAP = auto()
     NOT = auto()
     OPTIONAL = auto()
@@ -163,45 +166,28 @@ class Lexer:
     # 保留關鍵字映射
     KEYWORDS = {
         'and': TokenType.AND,
-        'any': TokenType.ANY,
-        'bool': TokenType.BOOL,
+        'await': TokenType.AWAIT,
         'const': TokenType.CONST,
-        'copy': TokenType.COPY,
         'else': TokenType.ELSE,
-        'error': TokenType.ERROR,
         'extends': TokenType.EXTENDS,
         'false': TokenType.FALSE,
-        'float': TokenType.FLOAT,
         'fn': TokenType.FN,
         'for': TokenType.FOR,
+        'from': TokenType.FROM,
         'if': TokenType.IF,
+        'import': TokenType.IMPORT,
         'in': TokenType.IN,
-        'int': TokenType.INT,
         'interface': TokenType.INTERFACE,
-        'is_error': TokenType.IS_ERROR,
-        'len': TokenType.LEN,
-        'list': TokenType.LIST,
-        'map': TokenType.MAP,
+        'main': TokenType.MAIN,
         'not': TokenType.NOT,
-        'optional': TokenType.OPTIONAL,
         'or': TokenType.OR,
-        'ptr': TokenType.PTR,
-        'print': TokenType.PRINT,
-        'println': TokenType.PRINTLN,
         'return': TokenType.RETURN,
-        'sleep': TokenType.SLEEP,
         'spawn': TokenType.SPAWN,
-        'string': TokenType.STRING,
         'struct': TokenType.STRUCT,
         'true': TokenType.TRUE,
-        'tuple': TokenType.TUPLE,
-        'union': TokenType.UNION,
         'unsafe': TokenType.UNSAFE,
-        'await': TokenType.AWAIT,
         'while': TokenType.WHILE,
-        'override': TokenType.OVERRIDE,
-        'void': TokenType.VOID,
-        'null': TokenType.NULL
+        'override': TokenType.OVERRIDE
     }
     
     def __init__(self, source: str, file_name: str = "<stdin>"):
