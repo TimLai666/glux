@@ -384,6 +384,8 @@ class Lexer:
                 self.add_token(TokenType.GREATER)
         
         # 其他特殊字符
+        elif c == "?":  # ASCII 問號 (三元運算符)
+            self.add_token(TokenType.QUESTION)
         elif c == "？":  # 中文問號
             self.add_token(TokenType.QUESTION)
         elif c == "$":  # $ 符號 (在非模板字符串中)

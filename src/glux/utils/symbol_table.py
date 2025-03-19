@@ -275,7 +275,7 @@ class SymbolTable:
         Returns:
             符號或 None（如果未找到）
         """
-        return self.current_scope.resolve(name)
+        return self.current_scope.resolve_local(name, include_parent=True)
     
     def resolve_current_scope(self, name: str) -> Optional[Symbol]:
         """

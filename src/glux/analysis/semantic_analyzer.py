@@ -50,6 +50,9 @@ class SemanticAnalyzer:
         self.warnings = []
         
         try:
+            # 確保內建函數已初始化
+            self._initialize_builtin_functions()
+            
             # 符號分析
             symbol_analyzer = SymbolAnalyzer(self.symbol_table)
             symbol_analyzer.analyze_module(ast)

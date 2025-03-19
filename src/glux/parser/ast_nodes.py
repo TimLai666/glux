@@ -104,7 +104,8 @@ class ErrorTypeExpression(TypeExpression):
 class NamedTypeExpression(TypeExpression):
     """命名類型表達式，例如 int, string"""
     def __init__(self, type_name: str):
-        super().__init__(type_name)
+        self.type_name = type_name
+        self.name = type_name  # 添加 name 屬性
     
     def __repr__(self) -> str:
         return self.type_name

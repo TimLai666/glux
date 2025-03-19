@@ -33,6 +33,19 @@ class SymbolAnalyzer:
         # 追蹤未使用的符號
         self.defined_symbols: Set[str] = set()
         self.used_symbols: Set[str] = set()
+        
+        # 定義內建函數
+        self.defined_symbols.add("println")
+        self.defined_symbols.add("print")
+        self.defined_symbols.add("len")
+        self.defined_symbols.add("sleep")
+        self.defined_symbols.add("int")
+        self.defined_symbols.add("float")
+        self.defined_symbols.add("bool")
+        self.defined_symbols.add("string")
+        self.defined_symbols.add("copy")
+        self.defined_symbols.add("error")
+        self.defined_symbols.add("is_error")
     
     def analyze_module(self, module: ast_nodes.Module):
         """
@@ -75,7 +88,7 @@ class SymbolAnalyzer:
         Args:
             func: 函數宣告節點
         """
-        # 處理函數返回類型
+        # 處理返回類型
         return_type = None
         if func.return_type:
             type_name = func.return_type.name
@@ -87,7 +100,7 @@ class SymbolAnalyzer:
         # 處理參數類型
         param_types = []
         param_names = []
-        for param in func.parameters:
+        for param in func.params:
             param_type = None
             if param.type_annotation:
                 type_name = param.type_annotation.name
@@ -176,7 +189,7 @@ class SymbolAnalyzer:
         self.symbol_table.enter_scope(f"function {func.name}")
         
         # 定義參數
-        for param in func.parameters:
+        for param in func.params:
             param_type = None
             if param.type_annotation:
                 type_name = param.type_annotation.name
@@ -199,8 +212,14 @@ class SymbolAnalyzer:
             self.defined_symbols.add(param.name)
         
         # 分析函數體
-        for stmt in func.body:
-            self._analyze_statement(stmt)
+        if isinstance(func.body, ast_nodes.BlockStatement):
+            # 處理 BlockStatement
+            for stmt in func.body.statements:
+                self._analyze_statement(stmt)
+        else:
+            # 處理語句列表
+            for stmt in func.body:
+                self._analyze_statement(stmt)
         
         # 離開函數作用域
         self.symbol_table.exit_scope()
@@ -451,7 +470,7 @@ class SymbolAnalyzer:
         self.symbol_table.exit_scope()
         self.symbol_table.exit_loop()
     
-    def _analyze_return_statement(self, stmt: ast_nodes.ReturnStatement):
+    def _analyze_return_statement(self, stmt: ast_nodes.Return):
         """
         分析return語句
         
@@ -459,8 +478,8 @@ class SymbolAnalyzer:
             stmt: return語句節點
         """
         # 分析返回表達式
-        if stmt.expression:
-            self._analyze_expression(stmt.expression)
+        if stmt.value:
+            self._analyze_expression(stmt.value)
     
     def _analyze_expression(self, expr):
         """
@@ -498,12 +517,10 @@ class SymbolAnalyzer:
             var: 變數節點
         """
         # 檢查變數是否已定義
-        if not self.symbol_table.resolve(var.name):
+        if var.name not in self.defined_symbols and not self.symbol_table.resolve(var.name):
             self.errors.append(f"未定義的變數 '{var.name}'")
-            return
         
         # 標記變數為已使用
-        self.symbol_table.mark_symbol_used(var.name)
         self.used_symbols.add(var.name)
     
     def _analyze_call_expr(self, expr: ast_nodes.CallExpr):

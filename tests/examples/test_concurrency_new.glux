@@ -24,12 +24,12 @@ fn main() {
     println("啟動併發任務...")
     
     // 使用spawn啟動任務
-    task1 := spawn get_number
-    task2 := spawn get_message
+    task1 := spawn get_number()
+    task2 := spawn get_message()
     
     // 同時等待兩個任務完成
     println("等待任務完成...")
-    results := await task1(), task2()
+    results := await task1, task2
     
     // 獲取結果
     number := results.0
@@ -45,10 +45,10 @@ fn main() {
         sleep(0.3)
         println("匿名函數執行完成！")
         return "來自匿名函數的訊息"
-    }
+    }()
     
     // 等待匿名函數執行完成
-    result := await task3()
+    result := await task3
     println(`匿名函數結果：${result}`)
     
     println("所有任務完成！")

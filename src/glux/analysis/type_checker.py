@@ -73,7 +73,7 @@ class TypeChecker:
         self.symbol_table.enter_scope(f"function {func.name}")
         
         # 檢查參數
-        for param in func.parameters:
+        for param in func.params:
             param_type = None
             if param.type_annotation:
                 param_type_name = param.type_annotation.name
@@ -93,8 +93,14 @@ class TypeChecker:
             )
         
         # 檢查函數體
-        for stmt in func.body:
-            self._check_statement(stmt)
+        if isinstance(func.body, ast_nodes.BlockStatement):
+            # 處理 BlockStatement
+            for stmt in func.body.statements:
+                self._check_statement(stmt)
+        else:
+            # 處理語句列表
+            for stmt in func.body:
+                self._check_statement(stmt)
         
         # 離開函數作用域
         self.symbol_table.exit_scope()
@@ -356,7 +362,7 @@ class TypeChecker:
         self.symbol_table.exit_scope()
         self.symbol_table.exit_loop()
     
-    def _check_return_statement(self, stmt: ast_nodes.ReturnStatement):
+    def _check_return_statement(self, stmt: ast_nodes.Return):
         """
         檢查return語句的類型正確性
         
@@ -366,15 +372,15 @@ class TypeChecker:
         # 獲取當前函數的返回類型
         expected_type = self.symbol_table.get_current_function_return_type()
         
-        if not stmt.expression and expected_type and expected_type.name != "void":
+        if not stmt.value and expected_type and expected_type.name != "void":
             self.errors.append(f"函數期望返回 '{expected_type.name}' 類型，但無返回值")
             return
         
-        if not stmt.expression:
+        if not stmt.value:
             return
         
         # 檢查返回表達式類型
-        actual_type = self._check_expression(stmt.expression)
+        actual_type = self._check_expression(stmt.value)
         
         if expected_type and actual_type:
             if not TypeSystem.is_type_compatible(actual_type.name, expected_type.name):
@@ -537,6 +543,8 @@ class TypeChecker:
             result_type = self._check_comparison_chain(expr)
         elif isinstance(expr, ast_nodes.GroupingExpression):
             result_type = self._check_expression(expr.expression)
+        elif isinstance(expr, ast_nodes.ConditionalExpression):
+            result_type = self._check_conditional_expr(expr)
         elif isinstance(expr, ast_nodes.Number):
             # 直接處理 Number 節點
             result_type = self._check_number_literal(expr)
@@ -1000,4 +1008,36 @@ class TypeChecker:
             return True
         
         # 其他情況不可比較
-        return False 
+        return False
+
+    def _check_conditional_expr(self, expr: ast_nodes.ConditionalExpression) -> Optional[GluxType]:
+        """
+        檢查三元運算符表達式的類型正確性
+        
+        Args:
+            expr: 三元運算符表達式節點
+            
+        Returns:
+            表達式類型或None（如果有錯誤）
+        """
+        # 檢查條件表達式，必須是布爾類型
+        condition_type = self._check_expression(expr.condition)
+        if condition_type and condition_type.name != "bool":
+            self.errors.append(f"條件表達式必須是布爾類型，得到 '{condition_type.name}'")
+        
+        # 檢查 then 和 else 分支表達式
+        then_type = self._check_expression(expr.then_expr)
+        else_type = self._check_expression(expr.else_expr)
+        
+        # 如果任一分支為 None，則無法確定類型
+        if not then_type or not else_type:
+            return None
+        
+        # 嘗試找到兩個分支的共同類型
+        common_type_name = TypeSystem.get_common_type(then_type.name, else_type.name)
+        if not common_type_name:
+            self.errors.append(f"三元運算符的兩個分支必須有共同類型，得到 '{then_type.name}' 和 '{else_type.name}'")
+            return None
+        
+        # 返回共同類型
+        return TypeSystem.get_type(common_type_name) 
