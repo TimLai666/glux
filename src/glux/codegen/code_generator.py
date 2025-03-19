@@ -120,6 +120,9 @@ class LLVMCodeGenerator(CodeGenerator):
                 elif isinstance(expr, ast_nodes.GetExpression):
                     # 處理成員訪問（如：results.0）
                     self.result += self._generate_member_access(expr)
+                elif isinstance(expr, ast_nodes.ConditionalExpression):
+                    # 處理條件表達式（三元運算符）
+                    self.result += self._generate_conditional_expression(expr)
             elif isinstance(stmt, ast_nodes.IfStatement):
                 self.result += self._generate_if_statement(stmt)
             elif isinstance(stmt, ast_nodes.VarDeclaration):
@@ -278,53 +281,42 @@ class LLVMCodeGenerator(CodeGenerator):
                 result += f"    %cond_value_{self.var_counter} = icmp ne i32 1, 0\n"
         else:
             # 假設是變量或其他表達式
-        """從表達式中收集必要的項目"""
-        if isinstance(expr, ast_nodes.CallExpression) and isinstance(expr.callee, ast_nodes.Variable):
-            if expr.callee.name == "println":
-                for arg in expr.arguments:
-                    self._collect_string_from_expr(arg)
-            elif expr.callee.name == "error":
-                # 收集錯誤消息
-                if len(expr.arguments) > 0 and isinstance(expr.arguments[0], ast_nodes.StringLiteral):
-                    error_msg = expr.arguments[0].value
-                    error_code = 1  # 默認錯誤代碼
-                    
-                    # 存儲錯誤消息
-                    error_id = self.error_counter
-                    self.error_counter += 1
-                    error_msg_val = error_msg.replace("\\", "\\\\").replace("\"", "\\22") + "\\00"
-                    self.error_instances[error_id] = (error_msg_val, error_code)
-                    
-                    # 同時也將消息添加為一個普通字符串，方便代碼生成
-                    self._get_global_string(error_msg_val)
-        elif isinstance(expr, ast_nodes.SpawnExpression):
-            # 處理併發函數
-            if isinstance(expr.function_call, ast_nodes.CallExpression):
-                # 獲取或生成函數體
-                func_name = ""
-                if isinstance(expr.function_call.callee, ast_nodes.Variable):
-                    func_name = expr.function_call.callee.name
-                
-                # 這裡應該取得或生成函數體的 LLVM IR
-                # 在實際實現中，這裡需要更複雜的邏輯
-                thread_id = self.thread_counter
-                self.thread_counter += 1
-                
-                # 簡化處理：假設每個函數返回一個整數
-                # 在實際實現中，需要分析函數的返回類型
-                func_id = f"thread_func_{self.function_counter}"
-                self.function_counter += 1
-                
-                # 生成一個簡單的線程函數
-                func_body = f"define i8* @{func_id}(i8* %arg) {{\n"
-                func_body += f"    ; 線程函數的實現 (模擬調用 {func_name})\n"
-                func_body += f"    %result_ptr = getelementptr %thread_result_t, %thread_result_t* @thread_result_{thread_id}, i32 0, i32 0\n"
-                func_body += f"    store i32 42, i32* %result_ptr  ; 假設函數返回42\n"
-                func_body += f"    ret i8* null\n"
-                func_body += f"}}\n"
-                
-                self.spawn_funcs.append((func_id, func_body))
-                self.result_data[expr] = (thread_id, "i32")  # 保存結果類型信息
+            # 這裡可以添加更多處理
+            result += f"    ; 警告：將使用表達式結果作為布爾值\n"
+            result += f"    %cond_value_{self.var_counter} = icmp ne i32 1, 0\n"
+        
+        # 條件跳轉
+        result += f"    br i1 %cond_value_{self.var_counter}, label %{then_label}, label %{else_label}\n"
+        
+        # then 分支
+        result += f"\n{then_label}:\n"
+        # 生成 then 表達式的代碼
+        if isinstance(expr.then_expr, ast_nodes.Number):
+            result += f"    store i32 {expr.then_expr.value}, i32* %cond_result_{self.var_counter}\n"
+        else:
+            # 可以添加更多表達式處理
+            result += f"    ; 警告：未處理的表達式類型 {type(expr.then_expr)}\n"
+            result += f"    store i32 1, i32* %cond_result_{self.var_counter}\n"
+        
+        result += f"    br label %{end_label}\n"
+        
+        # else 分支
+        result += f"\n{else_label}:\n"
+        # 生成 else 表達式的代碼
+        if isinstance(expr.else_expr, ast_nodes.Number):
+            result += f"    store i32 {expr.else_expr.value}, i32* %cond_result_{self.var_counter}\n"
+        else:
+            # 可以添加更多表達式處理
+            result += f"    ; 警告：未處理的表達式類型 {type(expr.else_expr)}\n"
+            result += f"    store i32 0, i32* %cond_result_{self.var_counter}\n"
+        
+        result += f"    br label %{end_label}\n"
+        
+        # 結束標籤
+        result += f"\n{end_label}:\n"
+        
+        self.var_counter += 1
+        return result
     
     def _collect_string_from_expr(self, expr):
         """從表達式中收集字符串"""
