@@ -1,1 +1,11 @@
- 
+// 最小並發測試
+fn work() -> int {
+    return 42
+}
+
+fn main() {
+    // 創建一個極簡的並發任務
+    job := spawn work()
+    result := await job
+    println(result)
+} 

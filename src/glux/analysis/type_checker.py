@@ -717,25 +717,31 @@ class TypeChecker:
             expr: 函數調用表達式節點
             
         Returns:
-            函數返回類型
+            函數返回值類型
         """
-        # 檢查被調用對象類型
         callee_type = self._check_expression(expr.callee)
         if not callee_type:
             return None
         
-        # 獲取函數名稱
+        # 獲取函數名稱（如果是變量調用）
         func_name = None
         if isinstance(expr.callee, ast_nodes.Variable):
             func_name = expr.callee.name
         
         # 檢查是否為函數類型
-        if not callee_type.is_function():
-            self.errors.append(f"無法調用非函數類型 '{callee_type.name}'")
+        if callee_type.kind != TypeKind.FUNCTION:
+            if func_name:
+                self.errors.append(f"無法調用非函數類型：'{func_name}' 的類型是 '{callee_type.name}'")
+            else:
+                self.errors.append(f"無法調用非函數類型：類型是 '{callee_type.name}'")
             return None
         
-        # 檢查參數個數
-        if callee_type.param_types and len(expr.arguments) != len(callee_type.param_types):
+        # 檢查參數數量
+        if callee_type.param_types is None:
+            # 處理未知參數類型的情況（可能是自動生成的函數類型）
+            return callee_type.return_type
+        
+        if len(expr.arguments) != len(callee_type.param_types):
             self.errors.append(
                 f"函數調用 '{func_name or 'anonymous'}' 參數數量不匹配："
                 f"期望 {len(callee_type.param_types)} 個，得到 {len(expr.arguments)} 個"

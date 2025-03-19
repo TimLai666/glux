@@ -83,21 +83,29 @@ class TypeSystem:
         return map_type
     
     @classmethod
-    def create_function_type(cls, return_type: GluxType, param_types: List[GluxType], 
+    def create_function_type(cls, return_type: Optional[GluxType], param_types: List[GluxType], 
                             param_names: Optional[List[str]] = None) -> GluxType:
         """
         創建函數類型
         
         Args:
-            return_type: 返回值類型
+            return_type: 返回值類型，若為None則表示void
             param_types: 參數類型列表
             param_names: 參數名稱列表（可選）
             
         Returns:
             函數類型
         """
+        # 處理None返回類型（視為void）
+        if return_type is None:
+            return_type = cls.get_type("void")
+            if return_type is None:
+                # 如果void類型未註冊，則創建一個
+                return_type = GluxType("void", TypeKind.VOID)
+                cls.register_type(return_type)
+        
         # 生成函數類型名稱
-        params_str = ",".join(p.name for p in param_types)
+        params_str = ",".join(p.name for p in param_types if p is not None)
         type_name = f"fn({params_str})->{return_type.name}"
         
         # 檢查是否已存在
@@ -107,6 +115,7 @@ class TypeSystem:
         fn_type = GluxType(type_name, TypeKind.FUNCTION)
         fn_type.return_type = return_type
         fn_type.params = param_types
+        fn_type.param_types = param_types  # 同時設置param_types屬性，以確保兼容性
         
         if param_names:
             fn_type.param_names = param_names

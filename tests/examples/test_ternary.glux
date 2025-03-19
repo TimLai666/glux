@@ -1,0 +1,15 @@
+// 測試三元運算符
+
+fn main() {
+    x := 10
+    result := x > 5 ? "大於5" : "不大於5"
+    println(result)  // 應輸出 "大於5"
+    
+    y := 3
+    nested := x > 5 ? (y > 5 ? "x和y都大於5" : "x大於5但y不大於5") : "x不大於5"
+    println(nested)  // 應輸出 "x大於5但y不大於5"
+    
+    // 三元運算符與算術結合
+    value := x > 5 ? x + y : x - y
+    println(value)   // 應輸出 13
+} 

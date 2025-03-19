@@ -101,12 +101,16 @@ class ControlFlowAnalyzer:
         分析語句塊
         
         Args:
-            statements: 語句列表
+            statements: 語句列表或BlockStatement
             
         Returns:
             語句塊是否確定終止（如有返回語句或拋出異常）
         """
         terminates = False
+        
+        # 處理BlockStatement對象
+        if isinstance(statements, ast_nodes.BlockStatement):
+            statements = statements.statements
         
         for i, stmt in enumerate(statements):
             # 檢查前面的語句是否已終止，如果是，則後面的代碼無法到達

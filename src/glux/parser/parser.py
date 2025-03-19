@@ -1081,7 +1081,7 @@ class Parser:
     
     def spawn_expression(self) -> ast_nodes.Expression:
         """
-        解析spawn表達式
+        解析spawn表達式，例如：spawn work()
         
         Returns:
             spawn表達式 AST 節點
@@ -1098,7 +1098,17 @@ class Parser:
             return ast_nodes.ErrorExpression("spawn後必須接函數調用")
         
         # 解析函數調用
-        call = self.finish_call(callee)
+        self.consume(TokenType.LEFT_PAREN, "期望 '(' 在函數名稱之後")
+        arguments = []
+        if not self.check(TokenType.RIGHT_PAREN):
+            arguments.append(self.assignment())
+            
+            while self.match(TokenType.COMMA):
+                arguments.append(self.assignment())
+        
+        self.consume(TokenType.RIGHT_PAREN, "期望 ')' 在參數列表之後")
+        
+        call = ast_nodes.CallExpression(callee, arguments)
         return ast_nodes.SpawnExpression(call)
     
     def await_expression(self) -> ast_nodes.Expression:

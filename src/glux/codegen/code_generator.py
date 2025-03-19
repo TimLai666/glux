@@ -254,69 +254,83 @@ class LLVMCodeGenerator(CodeGenerator):
             self._collect_expr_items(expr.else_expr)
 
     def _generate_conditional_expression(self, expr):
-        """生成條件表達式（三元運算符）的 LLVM IR 代碼"""
-        result = "    ; 條件表達式（三元運算符）\n"
+        """
+        生成三元運算符表達式的LLVM IR代碼
         
-        # 生成唯一的標籤
-        then_label = f"cond_then_{self.label_counter}"
-        else_label = f"cond_else_{self.label_counter}"
-        end_label = f"cond_end_{self.label_counter}"
-        self.label_counter += 1
+        Args:
+            expr: 三元運算符表達式
+            
+        Returns:
+            唯一標識符
+        """
+        # 生成唯一標識符
+        result_id = self._get_unique_id()
         
-        # 為結果分配內存
-        result += f"    %cond_result_{self.var_counter} = alloca i32\n"
+        # 取得條件值
+        condition_id = self.generate(expr.condition)
+        condition_data = self.result_data.get(condition_id, {})
+        condition_value = condition_data.get('value')
+        if not condition_value:
+            self.logger.warning(f"未找到條件表達式的值: {expr.condition}")
+            return result_id
         
-        # 生成條件表達式
-        if isinstance(expr.condition, ast_nodes.BinaryExpr):
-            # 處理二元表達式作為條件
-            if expr.condition.operator in ["<", ">", "<=", ">=", "==", "!="]:
-                # 比較運算
-                cond_result = self._generate_comparison(expr.condition)
-                result += cond_result
-                result += f"    %cond_value_{self.var_counter} = load i1, i1* %comp_result_{self.var_counter-1}\n"
-            else:
-                # 其他二元運算，假設結果為真
-                # 這裡可以添加更多處理，例如檢查結果是否為0
-                result += f"    ; 警告：將使用二元運算結果作為布爾值\n"
-                result += f"    %cond_value_{self.var_counter} = icmp ne i32 1, 0\n"
-        else:
-            # 假設是變量或其他表達式
-            # 這裡可以添加更多處理
-            result += f"    ; 警告：將使用表達式結果作為布爾值\n"
-            result += f"    %cond_value_{self.var_counter} = icmp ne i32 1, 0\n"
+        # 創建一些基本塊
+        func = self.builder.basic_block.function
+        then_block = func.append_basic_block(f"ternary.then.{result_id}")
+        else_block = func.append_basic_block(f"ternary.else.{result_id}")
+        merge_block = func.append_basic_block(f"ternary.merge.{result_id}")
         
         # 條件跳轉
-        result += f"    br i1 %cond_value_{self.var_counter}, label %{then_label}, label %{else_label}\n"
+        self.builder.cbranch(condition_value, then_block, else_block)
         
-        # then 分支
-        result += f"\n{then_label}:\n"
-        # 生成 then 表達式的代碼
-        if isinstance(expr.then_expr, ast_nodes.Number):
-            result += f"    store i32 {expr.then_expr.value}, i32* %cond_result_{self.var_counter}\n"
-        else:
-            # 可以添加更多表達式處理
-            result += f"    ; 警告：未處理的表達式類型 {type(expr.then_expr)}\n"
-            result += f"    store i32 1, i32* %cond_result_{self.var_counter}\n"
+        # 生成then分支
+        self.builder.position_at_end(then_block)
+        then_value_id = self.generate(expr.then_expr)
+        then_data = self.result_data.get(then_value_id, {})
+        then_value = then_data.get('value')
+        if not then_value:
+            self.logger.warning(f"未找到then表達式的值: {expr.then_expr}")
+            then_value = self.context.i32_type().const_int(0)
+        then_type = then_data.get('type')
+        then_builder = self.builder
+        self.builder.branch(merge_block)
         
-        result += f"    br label %{end_label}\n"
+        # 生成else分支
+        self.builder.position_at_end(else_block)
+        else_value_id = self.generate(expr.else_expr)
+        else_data = self.result_data.get(else_value_id, {})
+        else_value = else_data.get('value')
+        if not else_value:
+            self.logger.warning(f"未找到else表達式的值: {expr.else_expr}")
+            else_value = self.context.i32_type().const_int(0)
+        else_type = else_data.get('type')
+        else_builder = self.builder
+        self.builder.branch(merge_block)
         
-        # else 分支
-        result += f"\n{else_label}:\n"
-        # 生成 else 表達式的代碼
-        if isinstance(expr.else_expr, ast_nodes.Number):
-            result += f"    store i32 {expr.else_expr.value}, i32* %cond_result_{self.var_counter}\n"
-        else:
-            # 可以添加更多表達式處理
-            result += f"    ; 警告：未處理的表達式類型 {type(expr.else_expr)}\n"
-            result += f"    store i32 0, i32* %cond_result_{self.var_counter}\n"
+        # 獲取適當的類型
+        result_type = then_type if then_type else else_type
+        if then_type and else_type and then_type != else_type:
+            # 簡單處理：使用其中一個類型，實際上可能需要類型轉換
+            self.logger.warning("三元運算符兩分支的值類型不同")
         
-        result += f"    br label %{end_label}\n"
+        # 合併結果
+        self.builder.position_at_end(merge_block)
+        phi = self.builder.phi(result_type, f"ternary.result.{result_id}")
+        phi.add_incoming(then_value, then_builder.block)
+        phi.add_incoming(else_value, else_builder.block)
         
-        # 結束標籤
-        result += f"\n{end_label}:\n"
+        # 分配內存並存儲結果
+        result_ptr = self.builder.alloca(result_type, name=f"ternary.ptr.{result_id}")
+        self.builder.store(phi, result_ptr)
         
-        self.var_counter += 1
-        return result
+        # 保存結果信息
+        self.result_data[result_id] = {
+            'value': phi,
+            'ptr': result_ptr,
+            'type': result_type
+        }
+        
+        return result_id
     
     def _collect_string_from_expr(self, expr):
         """從表達式中收集字符串"""
