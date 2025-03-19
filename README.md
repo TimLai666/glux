@@ -27,7 +27,7 @@ Glux 是一個現代化的程式語言，專注於提供安全、高效和易用
 
 1. 編譯並執行程式：
    ```bash
-   python3 -m src.glux.main <檔案路徑> -j
+   python main <檔案路徑> -j
    ```
    例如：
    ```bash
@@ -36,12 +36,12 @@ Glux 是一個現代化的程式語言，專注於提供安全、高效和易用
 
 2. 只檢查語法和語義：
    ```bash
-   python3 -m src.glux.main <檔案路徑> -c
+   python main <檔案路徑> -c
    ```
 
 3. 生成 LLVM IR：
    ```bash
-   python3 -m src.glux.main <檔案路徑> -i
+   python main <檔案路徑> -i
    ```
 
 ### 命令列選項
