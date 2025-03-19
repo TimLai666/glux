@@ -455,6 +455,13 @@ class Parser:
             operator = "or" if self.previous().type == TokenType.OR else "||"
             expr = ast_nodes.LogicalExpression(expr, operator, right)
         
+        # 解析三元運算符 (條件 ? 真值 : 假值)
+        if self.match(TokenType.QUESTION):
+            then_expr = self.expression()  # 解析條件為真時的表達式
+            self.consume(TokenType.COLON, "期望 ':' 在三元運算符中")
+            else_expr = self.logical_or()  # 解析條件為假時的表達式
+            expr = ast_nodes.ConditionalExpression(expr, then_expr, else_expr)
+        
         return expr
     
     def logical_and(self) -> ast_nodes.Expression:
@@ -1104,27 +1111,20 @@ class Parser:
         Returns:
             spawn表達式 AST 節點
         """
-        # spawn後必須接函數調用
-        if self.match(TokenType.FN):
-            # 直接定義並調用匿名函數
-            func_decl = self.function_declaration()
-            # 創建對匿名函數的調用
-            call = ast_nodes.CallExpression(ast_nodes.Variable(func_decl.name), [])
-            return ast_nodes.SpawnExpression(call)
-        else:
-            # 普通函數調用
-            callee = self.primary()
-            if not self.check(TokenType.LEFT_PAREN):
-                self.error("spawn後必須接函數調用")
-                return ast_nodes.ErrorExpression("spawn後必須接函數調用")
-            
-            # 解析函數調用
-            call = self.finish_call(callee)
-            return ast_nodes.SpawnExpression(call)
+        # 根據新的語法規範，spawn 必須直接後接函數調用
+        # 例如：spawn work1()
+        callee = self.primary()
+        if not self.check(TokenType.LEFT_PAREN):
+            self.error("spawn後必須接函數調用")
+            return ast_nodes.ErrorExpression("spawn後必須接函數調用")
+        
+        # 解析函數調用
+        call = self.finish_call(callee)
+        return ast_nodes.SpawnExpression(call)
     
     def await_expression(self) -> ast_nodes.AwaitExpression:
         """
-        解析await表達式，例如：await work1(), work2()
+        解析await表達式，例如：await task1(), task2()
         
         Returns:
             await表達式 AST 節點
@@ -1132,21 +1132,32 @@ class Parser:
         # 解析等待的表達式列表
         expressions = []
         
-        # 解析第一個表達式，允許函數調用形式
-        callee = self.primary()
-        # 如果是函數調用（有左括號），則解析成函數調用
-        if self.check(TokenType.LEFT_PAREN):
-            expressions.append(self.finish_call(callee))
+        # 解析第一個表達式
+        if self.check(TokenType.SPAWN):
+            # 如果是 spawn 表達式（例如: await spawn work1()）
+            self.advance()  # 消耗 spawn 關鍵字
+            expressions.append(self.spawn_expression())
         else:
-            expressions.append(callee)
+            # 普通表達式
+            expr = self.primary()
+            # 如果是函數調用（例如: await task1()）
+            if self.check(TokenType.LEFT_PAREN):
+                expressions.append(self.finish_call(expr))
+            else:
+                expressions.append(expr)
         
         # 解析後續表達式（如果有）
         while self.match(TokenType.COMMA):
-            callee = self.primary()
-            # 如果是函數調用，則解析成函數調用
-            if self.check(TokenType.LEFT_PAREN):
-                expressions.append(self.finish_call(callee))
+            if self.match(TokenType.SPAWN):
+                # 如果是 spawn 表達式（例如: await task1(), spawn work2()）
+                expressions.append(self.spawn_expression())
             else:
-                expressions.append(callee)
+                # 普通表達式
+                expr = self.primary()
+                # 如果是函數調用
+                if self.check(TokenType.LEFT_PAREN):
+                    expressions.append(self.finish_call(expr))
+                else:
+                    expressions.append(expr)
         
         return ast_nodes.AwaitExpression(expressions) 

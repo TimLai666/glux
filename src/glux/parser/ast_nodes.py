@@ -893,4 +893,25 @@ class UnaryExpr(Expression):
         self.operand = operand
     
     def __repr__(self) -> str:
-        return f"{self.operator}({self.operand})" 
+        return f"{self.operator}({self.operand})"
+
+
+class ConditionalExpression(Expression):
+    """條件表達式（三元運算符）節點"""
+    
+    def __init__(self, condition: Expression, then_expr: Expression, else_expr: Expression):
+        """
+        初始化條件表達式節點
+        
+        Args:
+            condition: 條件表達式
+            then_expr: 條件為真時的表達式
+            else_expr: 條件為假時的表達式
+        """
+        super().__init__()
+        self.condition = condition
+        self.then_expr = then_expr
+        self.else_expr = else_expr
+    
+    def __repr__(self) -> str:
+        return f"({self.condition} ? {self.then_expr} : {self.else_expr})" 

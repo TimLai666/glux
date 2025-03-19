@@ -212,6 +212,72 @@ class LLVMCodeGenerator(CodeGenerator):
                 self._collect_string_from_expr(stmt.value)
     
     def _collect_expr_items(self, expr):
+        """從單個表達式收集項目"""
+        if isinstance(expr, ast_nodes.StringLiteral):
+            # 處理字符串字面量
+            if hasattr(expr, 'is_raw') and expr.is_raw:
+                # 處理模板字符串（反引號）
+                string_value = expr.value
+                if '${' in string_value:
+                    # 模板字符串包含插值表達式
+                    pass
+            else:
+                # 普通字符串
+                string_value = expr.value + "\\00"
+                self._add_global_string(string_value)
+        elif isinstance(expr, ast_nodes.CallExpression):
+            # 處理函數調用中的參數
+            for arg in expr.arguments:
+                self._collect_expr_items(arg)
+        elif isinstance(expr, ast_nodes.BinaryExpr):
+            # 處理二元表達式的左右操作數
+            self._collect_expr_items(expr.left)
+            self._collect_expr_items(expr.right)
+        elif isinstance(expr, ast_nodes.GetExpression):
+            # 處理成員訪問表達式
+            self._collect_expr_items(expr.object)
+        elif isinstance(expr, ast_nodes.SpawnExpression):
+            # 處理 spawn 表達式
+            if isinstance(expr.function_call, ast_nodes.CallExpression):
+                self._collect_expr_items(expr.function_call)
+        elif isinstance(expr, ast_nodes.AwaitExpression):
+            # 處理 await 表達式
+            for task_expr in expr.expressions:
+                self._collect_expr_items(task_expr)
+        elif isinstance(expr, ast_nodes.ConditionalExpression):
+            # 處理條件表達式（三元運算符）
+            self._collect_expr_items(expr.condition)
+            self._collect_expr_items(expr.then_expr)
+            self._collect_expr_items(expr.else_expr)
+
+    def _generate_conditional_expression(self, expr):
+        """生成條件表達式（三元運算符）的 LLVM IR 代碼"""
+        result = "    ; 條件表達式（三元運算符）\n"
+        
+        # 生成唯一的標籤
+        then_label = f"cond_then_{self.label_counter}"
+        else_label = f"cond_else_{self.label_counter}"
+        end_label = f"cond_end_{self.label_counter}"
+        self.label_counter += 1
+        
+        # 為結果分配內存
+        result += f"    %cond_result_{self.var_counter} = alloca i32\n"
+        
+        # 生成條件表達式
+        if isinstance(expr.condition, ast_nodes.BinaryExpr):
+            # 處理二元表達式作為條件
+            if expr.condition.operator in ["<", ">", "<=", ">=", "==", "!="]:
+                # 比較運算
+                cond_result = self._generate_comparison(expr.condition)
+                result += cond_result
+                result += f"    %cond_value_{self.var_counter} = load i1, i1* %comp_result_{self.var_counter-1}\n"
+            else:
+                # 其他二元運算，假設結果為真
+                # 這裡可以添加更多處理，例如檢查結果是否為0
+                result += f"    ; 警告：將使用二元運算結果作為布爾值\n"
+                result += f"    %cond_value_{self.var_counter} = icmp ne i32 1, 0\n"
+        else:
+            # 假設是變量或其他表達式
         """從表達式中收集必要的項目"""
         if isinstance(expr, ast_nodes.CallExpression) and isinstance(expr.callee, ast_nodes.Variable):
             if expr.callee.name == "println":
