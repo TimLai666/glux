@@ -77,7 +77,7 @@ if x > 0 {
 }
 
 // 循環
-for i := 0; i < 10; i += 1 {
+for i in range(10) {
     println(i)
 }
 
@@ -129,11 +129,11 @@ fn task2() {
 }
 
 // 啟動併發任務
-spawn task1()
-spawn task2()
+t1 := spawn task1()
+t2 := spawn task2()
 
 // 等待任務完成
-await task1(), task2()
+await t1, t2
 ```
 
 ### 5. 連續比較運算
