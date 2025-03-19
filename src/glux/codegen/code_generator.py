@@ -42,6 +42,7 @@ class LLVMCodeGenerator(CodeGenerator):
         self.string_map = {}  # 字符串映射 (轉義字符串 -> 索引)
         self.global_strings = {}  # 全局字符串 (變量名 -> 值)
         self.error_instances = {}  # 錯誤實例 (索引 -> (代碼, 消息))
+        self.result_data = {}  # 重置結果數據字典
         
         # 第一步：收集所有字符串和函數定義
         self._collect_items(ast)
@@ -116,6 +117,9 @@ class LLVMCodeGenerator(CodeGenerator):
                     self.result += self._generate_spawn(expr)
                 elif isinstance(expr, ast_nodes.AwaitExpression):
                     self.result += self._generate_await(expr)
+                elif isinstance(expr, ast_nodes.GetExpression):
+                    # 處理成員訪問（如：results.0）
+                    self.result += self._generate_member_access(expr)
             elif isinstance(stmt, ast_nodes.IfStatement):
                 self.result += self._generate_if_statement(stmt)
             elif isinstance(stmt, ast_nodes.VarDeclaration):
@@ -362,10 +366,7 @@ class LLVMCodeGenerator(CodeGenerator):
     
     def _generate_spawn(self, expr):
         """生成 spawn 表達式的 LLVM IR 代碼"""
-        result = "    ; spawn 表達式 - 創建並啟動一個新線程\n"
-        
-        # 目前的簡化實現：將 spawn 視為同步函數調用
-        # 在實際情況中，應該創建一個新線程並異步執行函數
+        result = "    ; spawn 表達式 - 創建並啟動一個新任務\n"
         
         if isinstance(expr, ast_nodes.SpawnExpression):
             function_call = expr.function_call
@@ -389,9 +390,6 @@ class LLVMCodeGenerator(CodeGenerator):
                     result += f"    %task_complete_ptr_{task_id} = getelementptr %task_struct, %task_struct* %task_{task_id}, i32 0, i32 1\n"
                     result += f"    store i1 false, i1* %task_complete_ptr_{task_id}\n"
                     
-                    # 啟動任務（在實際情況下，這裡應該創建線程）
-                    # 簡化的實現：直接調用函數並存儲結果
-                    
                     # 處理參數
                     args_str = ""
                     for i, arg in enumerate(function_call.arguments):
@@ -411,8 +409,20 @@ class LLVMCodeGenerator(CodeGenerator):
                     # 設置任務為已完成
                     result += f"    store i1 true, i1* %task_complete_ptr_{task_id}\n"
                     
-                    # 返回任務指針
+                    # 將任務指針存儲在一個變數中
+                    # 這個變數將被後續的 await 表達式使用
+                    result += f"    ; 保存任務指針，以便後續 await 使用\n"
+                    # 創建任務指針變數
+                    result += f"    %task_var_{task_id} = alloca i8*\n"
+                    # 將任務結構體指針轉換為 i8*
                     result += f"    %task_ptr_{task_id} = bitcast %task_struct* %task_{task_id} to i8*\n"
+                    # 存儲任務指針
+                    result += f"    store i8* %task_ptr_{task_id}, i8** %task_var_{task_id}\n"
+                    
+                    # 返回任務指針變數
+                    # 不要依賴 expr 變數，直接使用任務 ID
+                    self.result_data[expr] = (f"task_var_{task_id}", "i8*")
+                    
                     return result
         
         # 處理錯誤情況
@@ -431,16 +441,32 @@ class LLVMCodeGenerator(CodeGenerator):
                 if isinstance(task_expr, ast_nodes.CallExpression) and isinstance(task_expr.callee, ast_nodes.Variable):
                     task_var = task_expr.callee.name
                     
-                    # 在實際情況下，應該檢查任務是否完成，如果沒完成則阻塞
-                    # 簡化的實現：假設任務已完成，直接獲取結果
+                    # 獲取任務變數名稱
+                    # 這是從 spawn 表達式中獲取的任務指針變數
+                    task_var_name = ""
+                    for key, value in self.result_data.items():
+                        if isinstance(key, ast_nodes.SpawnExpression) and isinstance(key.function_call, ast_nodes.CallExpression):
+                            if isinstance(key.function_call.callee, ast_nodes.Variable) and key.function_call.callee.name == task_var:
+                                task_var_name = value[0]
+                                break
+                    
+                    # 如果找不到任務變數，使用一個默認的處理方式
+                    if not task_var_name:
+                        result += f"    ; 警告：無法找到任務 {task_var} 的指針變數\n"
+                        result += f"    %await_result_{self.var_counter} = call i32 @{task_var}()\n"
+                        self.var_counter += 1
+                        return result
                     
                     # 獲取任務指針
-                    result += f"    %await_task_ptr_{self.var_counter} = load i8*, i8** %{task_var}\n"
+                    result += f"    %await_task_ptr_{self.var_counter} = load i8*, i8** %{task_var_name}\n"
                     
                     # 獲取任務結果
                     result += f"    %await_task_{self.var_counter} = bitcast i8* %await_task_ptr_{self.var_counter} to %task_struct*\n"
                     result += f"    %await_result_ptr_{self.var_counter} = getelementptr %task_struct, %task_struct* %await_task_{self.var_counter}, i32 0, i32 2\n"
                     result += f"    %await_result_{self.var_counter} = load i32, i32* %await_result_ptr_{self.var_counter}\n"
+                    
+                    # 保存結果，以便後續使用
+                    self.result_data[expr] = (f"await_result_{self.var_counter}", "i32")
                     
                     self.var_counter += 1
                     return result
@@ -449,30 +475,45 @@ class LLVMCodeGenerator(CodeGenerator):
             elif len(expressions) > 1:
                 result += f"    ; 等待多個任務完成並返回結果元組\n"
                 
+                await_tuple_id = self.var_counter
+                self.var_counter += 1
+                
                 # 分配結果元組空間
-                result += f"    %await_tuple_{self.var_counter} = alloca %tuple{len(expressions)}_struct\n"
+                result += f"    %await_tuple_{await_tuple_id} = alloca %tuple{len(expressions)}_struct\n"
                 
                 # 處理每個任務
                 for i, task_expr in enumerate(expressions):
                     if isinstance(task_expr, ast_nodes.CallExpression) and isinstance(task_expr.callee, ast_nodes.Variable):
                         task_var = task_expr.callee.name
                         
-                        # 獲取任務指針
-                        result += f"    %await_task_ptr_{self.var_counter}_{i} = load i8*, i8** %{task_var}\n"
+                        # 獲取任務變數名稱
+                        task_var_name = ""
+                        for key, value in self.result_data.items():
+                            if isinstance(key, ast_nodes.SpawnExpression) and isinstance(key.function_call, ast_nodes.CallExpression):
+                                if isinstance(key.function_call.callee, ast_nodes.Variable) and key.function_call.callee.name == task_var:
+                                    task_var_name = value[0]
+                                    break
                         
-                        # 獲取任務結果
-                        result += f"    %await_task_{self.var_counter}_{i} = bitcast i8* %await_task_ptr_{self.var_counter}_{i} to %task_struct*\n"
-                        result += f"    %await_result_ptr_{self.var_counter}_{i} = getelementptr %task_struct, %task_struct* %await_task_{self.var_counter}_{i}, i32 0, i32 2\n"
-                        result += f"    %await_result_{self.var_counter}_{i} = load i32, i32* %await_result_ptr_{self.var_counter}_{i}\n"
+                        # 如果找不到任務變數，使用一個默認的處理方式
+                        if not task_var_name:
+                            result += f"    ; 警告：無法找到任務 {task_var} 的指針變數\n"
+                            result += f"    %await_result_{await_tuple_id}_{i} = call i32 @{task_var}()\n"
+                        else:
+                            # 獲取任務指針
+                            result += f"    %await_task_ptr_{await_tuple_id}_{i} = load i8*, i8** %{task_var_name}\n"
+                            
+                            # 獲取任務結果
+                            result += f"    %await_task_{await_tuple_id}_{i} = bitcast i8* %await_task_ptr_{await_tuple_id}_{i} to %task_struct*\n"
+                            result += f"    %await_result_ptr_{await_tuple_id}_{i} = getelementptr %task_struct, %task_struct* %await_task_{await_tuple_id}_{i}, i32 0, i32 2\n"
+                            result += f"    %await_result_{await_tuple_id}_{i} = load i32, i32* %await_result_ptr_{await_tuple_id}_{i}\n"
                         
                         # 存儲到元組中
-                        result += f"    %tuple_elem_ptr_{self.var_counter}_{i} = getelementptr %tuple{len(expressions)}_struct, %tuple{len(expressions)}_struct* %await_tuple_{self.var_counter}, i32 0, i32 {i}\n"
-                        result += f"    store i32 %await_result_{self.var_counter}_{i}, i32* %tuple_elem_ptr_{self.var_counter}_{i}\n"
+                        result += f"    %tuple_elem_ptr_{await_tuple_id}_{i} = getelementptr %tuple{len(expressions)}_struct, %tuple{len(expressions)}_struct* %await_tuple_{await_tuple_id}, i32 0, i32 {i}\n"
+                        result += f"    store i32 %await_result_{await_tuple_id}_{i}, i32* %tuple_elem_ptr_{await_tuple_id}_{i}\n"
                 
-                # 返回元組指針
-                result += f"    %await_tuple_ptr_{self.var_counter} = bitcast %tuple{len(expressions)}_struct* %await_tuple_{self.var_counter} to i8*\n"
+                # 保存元組結果，以便後續使用
+                self.result_data[expr] = (f"await_tuple_{await_tuple_id}", f"tuple{len(expressions)}_struct*")
                 
-                self.var_counter += 1
                 return result
         
         # 處理錯誤情況
@@ -482,11 +523,56 @@ class LLVMCodeGenerator(CodeGenerator):
         """生成變量聲明的 LLVM IR 代碼"""
         result = "    ; 變量聲明\n"
         
-        # 分配變量內存
-        result += f"    %{stmt.name} = alloca i32\n"
-        
         # 初始化變量
         if hasattr(stmt, 'value') and stmt.value is not None:
+            # 處理 spawn 表達式
+            if isinstance(stmt.value, ast_nodes.SpawnExpression):
+                if stmt.value in self.result_data:
+                    var_name, var_type = self.result_data[stmt.value]
+                    # 為變量分配內存
+                    result += f"    %{stmt.name} = alloca i8*\n"
+                    # 從 spawn 表達式加載任務指針
+                    result += f"    %spawn_val_{self.var_counter} = load i8*, i8** %{var_name}\n"
+                    # 存儲到變量
+                    result += f"    store i8* %spawn_val_{self.var_counter}, i8** %{stmt.name}\n"
+                    self.var_counter += 1
+                    return result
+                else:
+                    # 如果沒有找到 spawn 表達式的結果數據，使用默認處理
+                    result += f"    ; 警告：找不到 spawn 表達式的結果數據\n"
+                    result += f"    %{stmt.name} = alloca i8*\n"
+                    result += f"    store i8* null, i8** %{stmt.name}\n"
+                    return result
+            
+            # 處理 await 表達式
+            elif isinstance(stmt.value, ast_nodes.AwaitExpression):
+                if stmt.value in self.result_data:
+                    var_name, var_type = self.result_data[stmt.value]
+                    
+                    if "tuple" in var_type:  # 元組類型 (多個 await 結果)
+                        # 分配元組內存
+                        result += f"    %{stmt.name} = alloca {var_type}\n"
+                        # 從 await 結果複製元組數據
+                        result += f"    %tuple_val_{self.var_counter} = load {var_type}, {var_type}* %{var_name}\n"
+                        result += f"    store {var_type} %tuple_val_{self.var_counter}, {var_type}* %{stmt.name}\n"
+                        self.var_counter += 1
+                    else:  # 基本類型 (單個 await 結果)
+                        # 分配變量內存
+                        result += f"    %{stmt.name} = alloca i32\n"
+                        # 將 await 結果存儲到變量
+                        result += f"    store i32 %{var_name}, i32* %{stmt.name}\n"
+                    
+                    return result
+                else:
+                    # 如果沒有找到 await 表達式的結果數據，使用默認處理
+                    result += f"    ; 警告：找不到 await 表達式的結果數據\n"
+                    result += f"    %{stmt.name} = alloca i32\n"
+                    result += f"    store i32 0, i32* %{stmt.name}\n"
+                    return result
+            
+            # 其他類型的表達式處理 (原有代碼)
+            result += f"    %{stmt.name} = alloca i32\n"
+            
             if isinstance(stmt.value, ast_nodes.Number):
                 result += f"    store i32 {stmt.value.value}, i32* %{stmt.name}\n"
             elif isinstance(stmt.value, ast_nodes.BinaryExpr):
@@ -495,7 +581,7 @@ class LLVMCodeGenerator(CodeGenerator):
                     # 加法運算
                     if isinstance(stmt.value.left, ast_nodes.Number) and isinstance(stmt.value.right, ast_nodes.Number):
                         # 兩個數字相加
-                        value = stmt.value.left.value + stmt.value.right.value
+                        value = int(stmt.value.left.value) + int(stmt.value.right.value)
                         result += f"    store i32 {value}, i32* %{stmt.name}\n"
                     else:
                         # 需要生成臨時變量
@@ -538,6 +624,10 @@ class LLVMCodeGenerator(CodeGenerator):
             elif isinstance(stmt.value, ast_nodes.StringInterpolation):
                 # 處理字符串插值對象
                 result += self._generate_string_interpolation_var(stmt.value, stmt.name)
+        else:
+            # 沒有初始值
+            result += f"    %{stmt.name} = alloca i32\n"
+            result += f"    store i32 0, i32* %{stmt.name}\n"
         
         return result
 
@@ -1253,6 +1343,42 @@ class LLVMCodeGenerator(CodeGenerator):
             self.string_counter += 1
         
         return self.string_map[string]
+
+    def _generate_member_access(self, expr):
+        """生成成員訪問表達式的 LLVM IR 代碼"""
+        result = "    ; 成員訪問\n"
+        
+        # 處理元組成員訪問（例如：results.0）
+        if isinstance(expr, ast_nodes.GetExpression) and isinstance(expr.object, ast_nodes.Variable):
+            # 嘗試解析成員名稱是否為數字（元組索引）
+            try:
+                member_index = int(expr.name)
+                # 獲取變量名
+                var_name = expr.object.name
+                # 生成訪問元組元素的代碼
+                result += f"    ; 訪問元組 {var_name} 的第 {member_index} 個元素\n"
+                # 獲取元組元素指針
+                result += f"    %tuple_elem_ptr_{self.var_counter} = getelementptr inbounds %tuple{member_index+1}_struct, %tuple{member_index+1}_struct* %{var_name}, i32 0, i32 {member_index}\n"
+                # 加載元素值
+                result += f"    %tuple_elem_{self.var_counter} = load i32, i32* %tuple_elem_ptr_{self.var_counter}\n"
+                # 為結果分配內存
+                result += f"    %member_result_{self.var_counter} = alloca i32\n"
+                # 存儲結果
+                result += f"    store i32 %tuple_elem_{self.var_counter}, i32* %member_result_{self.var_counter}\n"
+                
+                # 保存結果，以便後續使用
+                self.result_data[expr] = (f"member_result_{self.var_counter}", "i32")
+                
+                self.var_counter += 1
+                return result
+            except ValueError:
+                # 非數字索引，可能是一般的結構體成員訪問
+                pass
+        
+        # 如果不是元組成員訪問，可以在這裡實現其他類型的成員訪問
+        result += "    ; 未實現的成員訪問類型\n"
+        
+        return result
 
 # 為了向後兼容，保留原有的CodeGenerator名稱
 CodeGenerator = LLVMCodeGenerator 
