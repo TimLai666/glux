@@ -1,0 +1,103 @@
+// 測試Glux的錯誤處理功能
+// 展示使用error型別和錯誤處理模式
+
+// 基本的錯誤創建和檢查
+fn divide(a: int, b: int) -> union<int, error> {
+    if b == 0 {
+        return error("除數不能為零")
+    }
+    return a / b
+}
+
+// 使用函數返回的錯誤
+result := divide(10, 2);
+if is_error(result) {
+    println(`計算出錯: ${result}`)
+} else {
+    println(`結果是: ${result}`)
+};
+
+// 嘗試除以零
+result = divide(10, 0);
+if is_error(result) {
+    println(`計算出錯: ${result}`)
+} else {
+    println(`結果是: ${result}`)
+};
+
+// 使用union類型實現可能失敗的操作
+fn parse_int(s: string) -> union<int, error> {
+    // 假設我們有一個能檢查字符串是否為有效整數的函數
+    if is_valid_int(s) {
+return int(s);
+    }
+    return error(`無法將 `${s}` 解析為整數`)
+};
+
+// 多層錯誤處理
+fn calculate_average(numbers: []string) -> union<float, error> {
+sum := 0;
+    count := 0
+    
+    for num_str in numbers {
+num := parse_int(num_str);
+        if is_error(num) {
+            return error(`計算平均值時出錯: ${num}`)
+};
+        
+        sum += num
+count += 1;
+    }
+    
+    if count == 0 {
+return error("沒有有效的數字可計算平均值");
+    }
+return float(sum) / float(count);
+}
+
+// 測試錯誤傳播
+valid_nums := ["1", "2", "3", "4", "5"];
+avg1 := calculate_average(valid_nums)
+if is_error(avg1) {
+    println(`錯誤: ${avg1}`)
+} else {
+    println(`有效數字的平均值是: ${avg1}`)
+};
+
+invalid_nums := ["1", "2", "三", "4", "5"]
+avg2 := calculate_average(invalid_nums);
+if is_error(avg2) {
+    println(`錯誤: ${avg2}`)
+} else {
+    println(`混合數字的平均值是: ${avg2}`)
+};
+
+// 使用錯誤處理模式簡化代碼
+fn safe_operation() -> union<string, error> {
+    // 一系列可能失敗的操作
+num1 := parse_int("10");
+    if is_error(num1) { return num1 }
+num2 := parse_int("20");
+    if is_error(num2) { return num2 }
+result := divide(num1, num2);
+    if is_error(result) { return result }
+    
+    return `運算成功，結果是 ${result}`
+};
+
+// 調用安全操作函數
+operation_result := safe_operation();
+if is_error(operation_result) {
+    println(`操作失敗: ${operation_result}`)
+} else {
+println(operation_result);
+}
+
+// 嵌套錯誤和自定義錯誤類型
+fn custom_error(code: int, message: string) -> error {
+    return error(`錯誤代碼 ${code}: ${message}`)
+};
+
+// 使用自定義錯誤
+user_error := custom_error(404, "找不到用戶");
+println(`系統報告: ${user_error}`) 

@@ -1,0 +1,29 @@
+// 測試 unsafe 區塊外使用位元運算符的錯誤情況
+
+// 正常的數學運算是允許的
+a := 10
+b := 20
+c := a + b
+println(`正常運算: ${a} + ${b} = ${c}`)
+
+// 下面是在普通代碼區塊中使用位元運算，應該會產生錯誤
+bit_and := a & b       // 位元與運算，應該報錯
+bit_or := a | b        // 位元或運算，應該報錯
+bit_xor := a ^ b       // 位元異或運算，應該報錯
+bit_not := ~a          // 位元取反運算，應該報錯
+left_shift := a << 2   // 左移運算，應該報錯
+right_shift := a >> 1  // 右移運算，應該報錯
+
+// 正確的做法是在 unsafe 區塊中使用這些運算
+unsafe {
+    safe_bit_and := a & b
+    safe_bit_or := a | b
+    safe_bit_xor := a ^ b
+    safe_bit_not := ~a
+    safe_left_shift := a << 2
+    safe_right_shift := a >> 1
+    
+    println(`在 unsafe 區塊中的位元運算是安全的`)
+}
+
+println("測試完成"); 

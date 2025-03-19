@@ -1,0 +1,43 @@
+// 測試一元運算符
+// 測試負號運算符
+a := 10
+neg_a := -a     // 數值取負
+println(`a = ${a}, -a = ${neg_a}`)
+
+b := 3.14
+neg_b := -b     // 浮點數取負
+println(`b = ${b}, -b = ${neg_b}`)
+
+// 測試邏輯非運算符
+flag := true
+not_flag := !flag   // 邏輯非
+println(`flag = ${flag}, !flag = ${not_flag}`)
+
+// 測試位元取反運算符 (必須在 unsafe 區塊中)
+unsafe {
+    c := 5  // 二進制: 101
+    bit_not_c := ~c    // 位元取反
+    println(`c = ${c}, ~c = ${bit_not_c}`)
+}
+
+// 測試運算符優先級
+d := 2
+e := 3
+result := -d * e    // 這應該等於 -6，而不是 -(d*e)
+println(`-${d} * ${e} = ${result}`)
+
+// 測試非法的一元運算符使用
+// 以下代碼應該會產生類型錯誤
+// str := "hello"
+// neg_str := -str   // 不能對字串取負號
+// not_num := !a     // 不能對數字進行邏輯非
+// bit_not_float := ~b // 不能對浮點數進行位元取反
+
+// 測試複合表達式
+f := 10
+g := 20
+complex_expr := -f + g * 2
+println(`-${f} + ${g} * 2 = ${complex_expr}`)
+
+complex_expr2 := -(f + g) * 2
+println(`-(${f} + ${g}) * 2 = ${complex_expr2}`) 

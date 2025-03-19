@@ -1,0 +1,55 @@
+// 測試併發機制和await回傳值
+
+// 定義一個簡單函數，返回一個值
+fn get_number() -> int {
+    println("開始計算...")
+    sleep(1)  // 模擬耗時計算
+    println("計算完成！")
+    return 42
+}
+
+// 定義另一個函數，返回一個字串
+fn get_message() -> string {
+    println("開始準備訊息...")
+    sleep(0.5)  // 模擬耗時操作
+    println("訊息準備完成！")
+    return "Hello, Glux!"
+}
+
+// 主函數
+fn main() {
+    println("程式開始執行")
+    
+    // 啟動兩個併發任務
+    println("啟動併發任務...")
+    
+    // 使用spawn啟動任務
+    task1 := spawn get_number
+    task2 := spawn get_message
+    
+    // 同時等待兩個任務完成
+    println("等待任務完成...")
+    results := await task1(), task2()
+    
+    // 獲取結果
+    number := results.0
+    message := results.1
+    
+    println(`得到的數字是：${number}`)
+    println(`得到的訊息是：${message}`)
+    
+    // 測試spawn直接定義函數
+    println("測試spawn直接定義函數...")
+    task3 := spawn fn() -> string {
+        println("匿名函數開始執行...")
+        sleep(0.3)
+        println("匿名函數執行完成！")
+        return "來自匿名函數的訊息"
+    }
+    
+    // 等待匿名函數執行完成
+    result := await task3()
+    println(`匿名函數結果：${result}`)
+    
+    println("所有任務完成！")
+} 
