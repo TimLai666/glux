@@ -83,12 +83,12 @@ class SymbolAnalyzer:
     
     def _pre_declare_function(self, func: ast_nodes.FunctionDeclaration):
         """
-        預先宣告函數
+        預先宣告函數符號 (用於實現函數互相呼叫)
         
         Args:
             func: 函數宣告節點
         """
-        # 處理返回類型
+        # 處理回傳型別
         return_type = None
         if func.return_type:
             type_name = func.return_type.name
@@ -102,8 +102,8 @@ class SymbolAnalyzer:
         param_names = []
         for param in func.params:
             param_type = None
-            if param.type_annotation:
-                type_name = param.type_annotation.name
+            if param.type_hint:  # 改為使用type_hint
+                type_name = param.type_hint.name
                 type_symbol = self.symbol_table.resolve_type(type_name)
                 if type_symbol:
                     param_type = type_symbol.type_info
@@ -191,8 +191,8 @@ class SymbolAnalyzer:
         # 定義參數
         for param in func.params:
             param_type = None
-            if param.type_annotation:
-                type_name = param.type_annotation.name
+            if param.type_hint:
+                type_name = param.type_hint.name
                 type_symbol = self.symbol_table.resolve_type(type_name)
                 if type_symbol:
                     param_type = type_symbol.type_info

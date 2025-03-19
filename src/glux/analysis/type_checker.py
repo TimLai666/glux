@@ -661,7 +661,7 @@ class TypeChecker:
     
     def _check_unary_expr(self, expr: ast_nodes.UnaryExpr) -> Optional[GluxType]:
         """
-        檢查一元表達式
+        檢查一元表達式的類型
         
         Args:
             expr: 一元表達式節點
@@ -676,37 +676,37 @@ class TypeChecker:
             return None
         
         # 根據運算符類型檢查
-        if expr.op == '+' or expr.op == '-':
+        if expr.operator == '+' or expr.operator == '-':
             # 一元加減法 - 檢查操作數是否為數值類型
             if not self._is_numeric_type(operand_type.name):
-                self.errors.append(f"一元運算符 '{expr.op}' 要求數值類型，但得到 '{operand_type.name}'")
+                self.errors.append(f"一元運算符 '{expr.operator}' 要求數值類型，但得到 '{operand_type.name}'")
                 return None
             
             return operand_type
         
-        elif expr.op == '!':
+        elif expr.operator == '!':
             # 邏輯否定 - 操作數必須是布爾類型
             if operand_type.name != 'bool':
-                self.errors.append(f"一元運算符 '{expr.op}' 要求布爾類型，但得到 '{operand_type.name}'")
+                self.errors.append(f"一元運算符 '{expr.operator}' 要求布爾類型，但得到 '{operand_type.name}'")
                 return None
             
             return TypeSystem.get_type("bool")
         
-        elif expr.op == '~':
+        elif expr.operator == '~':
             # 按位取反 - 操作數必須是整數類型
             if not self._is_integer_type(operand_type.name):
-                self.errors.append(f"一元運算符 '{expr.op}' 要求整數類型，但得到 '{operand_type.name}'")
+                self.errors.append(f"一元運算符 '{expr.operator}' 要求整數類型，但得到 '{operand_type.name}'")
                 return None
             
             # 按位取反需要在 unsafe 區塊中
             if not self.symbol_table.is_in_unsafe_block():
-                self.errors.append(f"按位取反運算符 '{expr.op}' 必須在 unsafe 區塊中使用")
+                self.errors.append(f"按位取反運算符 '{expr.operator}' 必須在 unsafe 區塊中使用")
                 return None
             
             return operand_type
         
         else:
-            self.errors.append(f"未知的一元運算符: '{expr.op}'")
+            self.errors.append(f"未知的一元運算符: '{expr.operator}'")
             return None
     
     def _check_call_expr(self, expr: ast_nodes.CallExpr) -> Optional[GluxType]:

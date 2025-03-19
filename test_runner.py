@@ -11,6 +11,8 @@ import glob
 from pathlib import Path
 from typing import List, Tuple, Dict
 import re
+import time
+import signal
 
 # 顏色輸出定義
 class Colors:
@@ -52,26 +54,31 @@ def run_check(file_path: str) -> Tuple[bool, List[str], List[str]]:
     Returns:
         (成功與否, 錯誤列表, 警告列表)
     """
-    cmd = ["python3", "-m", "src.glux.cli", "check", file_path]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    
-    # 調試輸出
-    print(f"標準輸出: {result.stdout}")
-    print(f"錯誤輸出: {result.stderr}")
-    
-    # 匹配錯誤和警告
-    errors = re.findall(r"ERROR.*?語法錯誤: (.*?)$|ERROR.*?語義錯誤: (.*?)$", result.stderr, re.MULTILINE)
-    warnings = re.findall(r"WARNING.*?警告: (.*?)$", result.stderr, re.MULTILINE)
-    
-    # 清理錯誤匹配
-    cleaned_errors = []
-    for err in errors:
-        # 每個匹配都是一個元組，取非空的那個
-        err_msg = next((e for e in err if e), "")
-        if err_msg:
-            cleaned_errors.append(err_msg)
-    
-    return result.returncode == 0, cleaned_errors, warnings
+    cmd = ["python3", "-m", "src.glux.main", "check", file_path]
+    try:
+        # 添加 30 秒超時限制
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        
+        # 調試輸出
+        print(f"標準輸出: {result.stdout}")
+        print(f"錯誤輸出: {result.stderr}")
+        
+        # 匹配錯誤和警告
+        errors = re.findall(r"ERROR.*?語法錯誤: (.*?)$|ERROR.*?語義錯誤: (.*?)$", result.stderr, re.MULTILINE)
+        warnings = re.findall(r"WARNING.*?警告: (.*?)$", result.stderr, re.MULTILINE)
+        
+        # 清理錯誤匹配
+        cleaned_errors = []
+        for err in errors:
+            # 每個匹配都是一個元組，取非空的那個
+            err_msg = next((e for e in err if e), "")
+            if err_msg:
+                cleaned_errors.append(err_msg)
+        
+        return result.returncode == 0, cleaned_errors, warnings
+    except subprocess.TimeoutExpired:
+        print(f"錯誤輸出: 檢查超時（超過30秒），可能存在無限循環或效能問題")
+        return False, ["檢查超時，中止執行"], []
 
 def run_execute(file_path: str) -> Tuple[bool, str]:
     """
@@ -83,9 +90,13 @@ def run_execute(file_path: str) -> Tuple[bool, str]:
     Returns:
         (成功與否, 輸出)
     """
-    cmd = ["python3", "-m", "src.glux.cli", "run", file_path, "-v"]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    return result.returncode == 0, result.stdout + result.stderr
+    cmd = ["python3", "-m", "src.glux.main", "run", file_path, "-v", "-j"]
+    try:
+        # 添加 30 秒超時限制
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        return result.returncode == 0, result.stdout + result.stderr
+    except subprocess.TimeoutExpired:
+        return False, "執行超時（超過30秒），可能存在無限循環或效能問題"
 
 def detect_language_issues(file_path: str, content: str = None) -> List[str]:
     """
@@ -153,6 +164,19 @@ def auto_fix_issues(file_path: str) -> Tuple[bool, List[str]]:
 
 def main():
     """主函數"""
+    # 設置整個測試的最大執行時間（10分鐘）
+    max_execution_time = 600  # 秒
+    
+    # 定義超時處理函數
+    def timeout_handler(signum, frame):
+        print_error(f"\n整體測試超時！已經執行超過 {max_execution_time} 秒")
+        sys.exit(2)
+    
+    # 設置超時信號處理
+    signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(max_execution_time)
+    
+    start_time = time.time()
     print_header("Glux 語言範例自動測試")
     
     examples = find_examples()
@@ -166,6 +190,8 @@ def main():
     }
     
     for example in examples:
+        # 檢查每個測試的耗時
+        example_start_time = time.time()
         print(f"\n處理範例: {os.path.basename(example)}")
         
         # 檢查語言規範問題
@@ -213,10 +239,18 @@ def main():
             print(output)
             if example not in results["failed"]:
                 results["failed"].append(example)
+        
+        # 報告每個測試的耗時
+        example_time = time.time() - example_start_time
+        print(f"測試耗時: {example_time:.2f} 秒")
+    
+    # 取消超時信號
+    signal.alarm(0)
     
     # 打印總結
+    total_time = time.time() - start_time
     print_header("測試總結")
-    print(f"總共測試了 {len(examples)} 個範例")
+    print(f"總共測試了 {len(examples)} 個範例，總耗時: {total_time:.2f} 秒")
     print(f"通過: {len(results['passed'])}")
     print(f"有警告: {len(results['warnings'])}")
     print(f"失敗: {len(results['failed'])}")

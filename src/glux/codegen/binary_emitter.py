@@ -52,20 +52,54 @@ class BinaryEmitter:
                 temp_ir_path = temp_file.name
                 temp_file.write(llvm_ir.encode('utf-8'))
             
-            # 使用llc編譯LLVM IR為目標文件
-            object_path = f"{self.output_path}.o"
-            self._run_command(["llc", "-filetype=obj", temp_ir_path, "-o", object_path])
+            # 檢查llc命令是否存在
+            try:
+                # 嘗試執行llc命令，確認其是否存在
+                subprocess.run(["llc", "--version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+                llc_exists = True
+            except FileNotFoundError:
+                llc_exists = False
+                error_msg = "未找到LLVM工具集(llc)。請安裝LLVM以支持生成二進制文件，或使用JIT選項直接運行LLVM IR。"
+                self.logger.error(error_msg)
+                self.errors.append(error_msg)
+                
+                # 保存LLVM IR文件，以便後續手動處理
+                ll_file = f"{self.output_path}.ll"
+                with open(ll_file, 'w', encoding='utf-8') as f:
+                    f.write(llvm_ir)
+                self.logger.info(f"已保存LLVM IR到文件: {ll_file}")
+                
+                # 清理臨時文件
+                os.unlink(temp_ir_path)
+                return ""
             
-            # 使用編譯器鏈接為可執行文件
-            self._run_command(["gcc", object_path, "-o", self.output_path])
-            
-            # 清理臨時文件
-            os.unlink(temp_ir_path)
-            os.unlink(object_path)
-            
-            self.logger.info(f"二進制文件生成完成: {self.output_path}")
-            return self.output_path
-            
+            if llc_exists:
+                # 使用llc編譯LLVM IR為目標文件
+                object_path = f"{self.output_path}.o"
+                success = self._run_command(["llc", "-filetype=obj", temp_ir_path, "-o", object_path])
+                
+                if not success:
+                    # 清理臨時文件
+                    os.unlink(temp_ir_path)
+                    return ""
+                
+                # 使用編譯器鏈接為可執行文件
+                success = self._run_command(["gcc", object_path, "-o", self.output_path])
+                
+                if not success:
+                    # 清理臨時文件
+                    os.unlink(temp_ir_path)
+                    if os.path.exists(object_path):
+                        os.unlink(object_path)
+                    return ""
+                
+                # 清理臨時文件
+                os.unlink(temp_ir_path)
+                os.unlink(object_path)
+                
+                self.logger.info(f"二進制文件生成完成: {self.output_path}")
+                return self.output_path
+                
         except Exception as e:
             error_msg = f"生成二進制文件時發生錯誤: {str(e)}"
             self.logger.error(error_msg)

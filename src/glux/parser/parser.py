@@ -887,6 +887,42 @@ class Parser:
         
         return ast_nodes.MethodDeclaration(name, parameters, return_type, body, struct_name, is_override)
     
+    def lambda_expression(self) -> ast_nodes.LambdaExpression:
+        """
+        解析匿名函數表達式，例如：fn(x: int) -> int { return x * 2 }
+        
+        Returns:
+            匿名函數表達式 AST 節點
+        """
+        # 匿名函數必須以 fn 開頭
+        self.consume(TokenType.FN, "期望 'fn' 在匿名函數開始處")
+        
+        # 解析參數列表
+        self.consume(TokenType.LEFT_PAREN, "期望 '(' 在 fn 關鍵字之後")
+        parameters = []
+        
+        if not self.check(TokenType.RIGHT_PAREN):
+            # 解析第一個參數
+            param = self.function_parameter()
+            parameters.append(param)
+            
+            # 解析後續參數
+            while self.match(TokenType.COMMA):
+                param = self.function_parameter()
+                parameters.append(param)
+        
+        self.consume(TokenType.RIGHT_PAREN, "期望 ')' 在參數列表之後")
+        
+        # 解析回傳型別（可選）
+        return_type = None
+        if self.match(TokenType.ARROW):
+            return_type = self.type_expression()
+        
+        # 解析函數體
+        body = self.block_statement()
+        
+        return ast_nodes.LambdaExpression(parameters, return_type, body)
+    
     # 輔助方法
     
     def match(self, *types) -> bool:
@@ -1081,7 +1117,7 @@ class Parser:
     
     def spawn_expression(self) -> ast_nodes.Expression:
         """
-        解析spawn表達式，例如：spawn work()
+        解析spawn表達式，例如：spawn work() 或 spawn fn() { ... }
         
         Returns:
             spawn表達式 AST 節點
@@ -1089,31 +1125,58 @@ class Parser:
         # 檢查是否為 spawn 表達式
         if not self.match(TokenType.SPAWN):
             return self.assignment()
-            
-        # 根據新的語法規範，spawn 必須直接後接函數調用
-        # 例如：spawn work1()
-        callee = self.primary()
-        if not self.check(TokenType.LEFT_PAREN):
-            self.error("spawn後必須接函數調用")
-            return ast_nodes.ErrorExpression("spawn後必須接函數調用")
         
-        # 解析函數調用
-        self.consume(TokenType.LEFT_PAREN, "期望 '(' 在函數名稱之後")
-        arguments = []
-        if not self.check(TokenType.RIGHT_PAREN):
-            arguments.append(self.assignment())
+        # 根據新的語法規範，spawn 可以後接函數調用或匿名函數
+        if self.check(TokenType.FN):
+            # 解析匿名函數表達式
+            lambda_expr = self.lambda_expression()
             
-            while self.match(TokenType.COMMA):
+            # 匿名函數必須立即被調用
+            if not self.check(TokenType.LEFT_PAREN):
+                self.error("spawn 後的匿名函數必須立即被調用")
+                return ast_nodes.ErrorExpression("spawn 後的匿名函數必須立即被調用")
+            
+            # 解析函數調用
+            self.consume(TokenType.LEFT_PAREN, "期望 '(' 在函數表達式之後")
+            arguments = []
+            if not self.check(TokenType.RIGHT_PAREN):
                 arguments.append(self.assignment())
-        
-        self.consume(TokenType.RIGHT_PAREN, "期望 ')' 在參數列表之後")
-        
-        call = ast_nodes.CallExpression(callee, arguments)
-        return ast_nodes.SpawnExpression(call)
+                
+                while self.match(TokenType.COMMA):
+                    arguments.append(self.assignment())
+            
+            self.consume(TokenType.RIGHT_PAREN, "期望 ')' 在參數列表之後")
+            
+            call = ast_nodes.CallExpression(lambda_expr, arguments)
+            return ast_nodes.SpawnExpression(call)
+        else:
+            # 普通變量或函數調用
+            callee = self.call()
+            
+            # 如果不是函數調用，將其包裝為調用表達式
+            if not isinstance(callee, ast_nodes.CallExpression):
+                if self.check(TokenType.LEFT_PAREN):
+                    # 如果後面是左括號，解析函數調用
+                    self.consume(TokenType.LEFT_PAREN, "期望 '(' 在函數名稱之後")
+                    arguments = []
+                    if not self.check(TokenType.RIGHT_PAREN):
+                        arguments.append(self.assignment())
+                        
+                        while self.match(TokenType.COMMA):
+                            arguments.append(self.assignment())
+                    
+                    self.consume(TokenType.RIGHT_PAREN, "期望 ')' 在參數列表之後")
+                    callee = ast_nodes.CallExpression(callee, arguments)
+                else:
+                    # 函數變量需要被調用
+                    self.error("spawn 後必須接函數調用")
+                    return ast_nodes.ErrorExpression("spawn 後必須接函數調用")
+            
+            return ast_nodes.SpawnExpression(callee)
     
     def await_expression(self) -> ast_nodes.Expression:
         """
-        解析await表達式，例如：await task1, task2
+        解析await表達式，例如：await task1, task2 或 await task1(), task2()
         
         Returns:
             await表達式 AST 節點
@@ -1125,12 +1188,12 @@ class Parser:
         # 解析等待的表達式列表
         expressions = []
         
-        # 解析第一個表達式（任務變數）
-        expressions.append(self.primary())
+        # 解析第一個表達式（可以是任務變數或函數調用）
+        expressions.append(self.call())
         
         # 解析後續表達式（如果有）
         while self.match(TokenType.COMMA):
-            expressions.append(self.primary())
+            expressions.append(self.call())
         
         # 創建 await 表達式節點
         return ast_nodes.AwaitExpression(expressions) 

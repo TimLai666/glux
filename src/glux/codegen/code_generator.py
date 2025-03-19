@@ -31,7 +31,13 @@ class LLVMCodeGenerator(CodeGenerator):
         self.spawn_funcs = []  # 保存所有需要生成的併發函數
         self.error_instances = {}  # 保存錯誤實例
         self.error_counter = 0
+        self.variables = {}  # 用於存儲變量類型信息
+        self.symbol_table = None  # 符號表，用於在代碼生成階段獲取類型信息
         
+    def set_symbol_table(self, symbol_table):
+        """設置符號表"""
+        self.symbol_table = symbol_table
+    
     def generate(self, ast):
         """生成 LLVM IR 代碼"""
         self.result = ""
@@ -49,7 +55,8 @@ class LLVMCodeGenerator(CodeGenerator):
         
         # 生成模塊頭
         self.result += "; 這是生成的 LLVM IR 代碼\n"
-        self.result += "declare i32 @printf(i8*, ...)\n\n"
+        self.result += "declare i32 @printf(i8*, ...)\n"
+        self.result += "declare i32 @sprintf(i8*, i8*, ...)\n\n"
         
         # 生成任務和併發相關的結構體定義
         self.result += "; 併發相關的結構體定義\n"
@@ -368,7 +375,7 @@ class LLVMCodeGenerator(CodeGenerator):
                 # 同時添加整數格式字符串，用於加載變量
                 self._add_global_string("%d\\00")
             else:
-                # 普通字符串字面量
+                # 普通字符串
                 self._add_global_string(expr.value + "\\00")
         elif isinstance(expr, ast_nodes.BinaryExpr) and expr.operator == "+":
             # 處理字符串連接
@@ -593,113 +600,108 @@ class LLVMCodeGenerator(CodeGenerator):
     
     def _generate_var_declaration(self, stmt):
         """生成變量聲明的 LLVM IR 代碼"""
-        result = "    ; 變量聲明\n"
+        name = stmt.name
+        result = f"    ; 聲明變量 {name}\n"
+        
+        # 決定變量類型
+        var_type = "i32"  # 默認為整數
+        
+        # 通過符號表獲取變量類型
+        if hasattr(self, 'symbol_table') and self.symbol_table:
+            symbol = self.symbol_table.lookup(name)
+            if symbol and hasattr(symbol, 'type'):
+                var_type_info = symbol.type
+                if var_type_info.kind == TypeKind.INT:
+                    var_type = "i32"
+                elif var_type_info.kind == TypeKind.FLOAT:
+                    var_type = "float"
+                elif var_type_info.kind == TypeKind.STRING:
+                    var_type = "i8*"
+                elif var_type_info.kind == TypeKind.BOOL:
+                    var_type = "i1"
+        # 如果無法從符號表獲取，則根據初始值推斷類型
+        elif stmt.value:
+            # 根據初始值推斷類型
+            if isinstance(stmt.value, ast_nodes.Number):
+                if isinstance(stmt.value.value, int):
+                    var_type = "i32"
+                else:
+                    var_type = "float"
+            elif isinstance(stmt.value, ast_nodes.StringLiteral):
+                var_type = "i8*"
+            elif isinstance(stmt.value, ast_nodes.Boolean):
+                var_type = "i1"
+        
+        # 記錄變量類型
+        self.variables[name] = {'type': var_type}
+        
+        # 分配內存空間
+        result += f"    %{name} = alloca {var_type}\n"
         
         # 初始化變量
-        if hasattr(stmt, 'value') and stmt.value is not None:
-            # 處理 spawn 表達式
-            if isinstance(stmt.value, ast_nodes.SpawnExpression):
-                if stmt.value in self.result_data:
-                    var_name, var_type = self.result_data[stmt.value]
-                    # 為變量分配內存
-                    result += f"    %{stmt.name} = alloca i8*\n"
-                    # 從 spawn 表達式加載任務指針
-                    result += f"    %spawn_val_{self.var_counter} = load i8*, i8** %{var_name}\n"
-                    # 存儲到變量
-                    result += f"    store i8* %spawn_val_{self.var_counter}, i8** %{stmt.name}\n"
-                    self.var_counter += 1
-                    return result
-                else:
-                    # 如果沒有找到 spawn 表達式的結果數據，使用默認處理
-                    result += f"    ; 警告：找不到 spawn 表達式的結果數據\n"
-                    result += f"    %{stmt.name} = alloca i8*\n"
-                    result += f"    store i8* null, i8** %{stmt.name}\n"
-                    return result
-            
-            # 處理 await 表達式
-            elif isinstance(stmt.value, ast_nodes.AwaitExpression):
-                if stmt.value in self.result_data:
-                    var_name, var_type = self.result_data[stmt.value]
-                    
-                    if "tuple" in var_type:  # 元組類型 (多個 await 結果)
-                        # 分配元組內存
-                        result += f"    %{stmt.name} = alloca {var_type}\n"
-                        # 從 await 結果複製元組數據
-                        result += f"    %tuple_val_{self.var_counter} = load {var_type}, {var_type}* %{var_name}\n"
-                        result += f"    store {var_type} %tuple_val_{self.var_counter}, {var_type}* %{stmt.name}\n"
-                        self.var_counter += 1
-                    else:  # 基本類型 (單個 await 結果)
-                        # 分配變量內存
-                        result += f"    %{stmt.name} = alloca i32\n"
-                        # 將 await 結果存儲到變量
-                        result += f"    store i32 %{var_name}, i32* %{stmt.name}\n"
-                    
-                    return result
-                else:
-                    # 如果沒有找到 await 表達式的結果數據，使用默認處理
-                    result += f"    ; 警告：找不到 await 表達式的結果數據\n"
-                    result += f"    %{stmt.name} = alloca i32\n"
-                    result += f"    store i32 0, i32* %{stmt.name}\n"
-                    return result
-            
-            # 其他類型的表達式處理 (原有代碼)
-            result += f"    %{stmt.name} = alloca i32\n"
-            
+        if stmt.value:
+            # 生成表達式代碼
             if isinstance(stmt.value, ast_nodes.Number):
-                result += f"    store i32 {stmt.value.value}, i32* %{stmt.name}\n"
-            elif isinstance(stmt.value, ast_nodes.BinaryExpr):
-                # 處理二元表達式
-                if stmt.value.operator == "+":
-                    # 加法運算
-                    if isinstance(stmt.value.left, ast_nodes.Number) and isinstance(stmt.value.right, ast_nodes.Number):
-                        # 兩個數字相加
-                        value = int(stmt.value.left.value) + int(stmt.value.right.value)
-                        result += f"    store i32 {value}, i32* %{stmt.name}\n"
-                    else:
-                        # 需要生成臨時變量
-                        result += self._generate_binary_expr(stmt.value, stmt.name)
-                elif stmt.value.operator in ["<", ">", "<=", ">=", "==", "!="]:
-                    # 比較運算
-                    result += self._generate_comparison(stmt.value, stmt.name)
+                if var_type == "i32":
+                    result += f"    store i32 {stmt.value.value}, i32* %{name}\n"
+                elif var_type == "float":
+                    result += f"    store float {stmt.value.value}.0, float* %{name}\n"
             elif isinstance(stmt.value, ast_nodes.StringLiteral):
-                # 處理字符串字面量
-                # 檢查是否是原始字符串模板（反引號字符串）
-                if hasattr(stmt.value, 'is_raw') and stmt.value.is_raw:
-                    # 處理模板字符串
-                    result += self._generate_template_string_var(stmt.value, stmt.name)
-                else:
-                    # 普通字符串
-                    # 注意：這裡簡化處理，假設變量類型是 i32，實際應根據類型系統處理
-                    result += f"    ; 警告：將字符串賦值給 i32 變量\n"
-                    # 將字符串存儲為字符串指針
-                    string_value = stmt.value.value + "\\00"
-                    str_idx = self._add_global_string(string_value)
-                    byte_len = self._get_byte_length(string_value)
-                    result += f"    %str_ptr_{self.var_counter} = getelementptr inbounds ([{byte_len} x i8], [{byte_len} x i8]* @.str.{str_idx}, i32 0, i32 0)\n"
-                    result += f"    %str_val_{self.var_counter} = ptrtoint i8* %str_ptr_{self.var_counter} to i32\n"
-                    result += f"    store i32 %str_val_{self.var_counter}, i32* %{stmt.name}\n"
-                    self.var_counter += 1
+                # 處理字符串初始化
+                str_idx = self._add_global_string(stmt.value.value + "\\00")
+                byte_len = self._get_byte_length(stmt.value.value + "\\00")
+                result += f"    %str_ptr_{self.var_counter} = getelementptr inbounds ([{byte_len} x i8], [{byte_len} x i8]* @.str.{str_idx}, i32 0, i32 0)\n"
+                result += f"    store i8* %str_ptr_{self.var_counter}, i8** %{name}\n"
+                self.var_counter += 1
+            elif isinstance(stmt.value, ast_nodes.Boolean):
+                # 處理布爾值初始化
+                bool_val = 1 if stmt.value.value else 0
+                result += f"    store i1 {bool_val}, i1* %{name}\n"
             elif isinstance(stmt.value, ast_nodes.Variable):
                 # 變量賦值
-                result += f"    %var_val_{self.var_counter} = load i32, i32* %{stmt.value.name}\n"
-                result += f"    store i32 %var_val_{self.var_counter}, i32* %{stmt.name}\n"
-                self.var_counter += 1
-            elif isinstance(stmt.value, ast_nodes.CallExpression):
-                # 函數調用結果賦值
-                if isinstance(stmt.value.callee, ast_nodes.Variable):
-                    if stmt.value.callee.name == "error":
-                        result += self._generate_error(stmt.value)
-                    # 可以添加其他函數的處理
-            elif isinstance(stmt.value, ast_nodes.TemplateLiteral):
-                # 處理模板字符串（反引號）
-                result += self._generate_template_string_var(stmt.value, stmt.name)
-            elif isinstance(stmt.value, ast_nodes.StringInterpolation):
-                # 處理字符串插值對象
-                result += self._generate_string_interpolation_var(stmt.value, stmt.name)
-        else:
-            # 沒有初始值
-            result += f"    %{stmt.name} = alloca i32\n"
-            result += f"    store i32 0, i32* %{stmt.name}\n"
+                if name in self.variables and stmt.value.name in self.variables:
+                    src_type = self.variables[stmt.value.name]['type']
+                    dst_type = self.variables[name]['type']
+                    
+                    # 相同類型直接賦值
+                    if src_type == dst_type:
+                        result += f"    %var_{self.var_counter} = load {src_type}, {src_type}* %{stmt.value.name}\n"
+                        result += f"    store {src_type} %var_{self.var_counter}, {src_type}* %{name}\n"
+                        self.var_counter += 1
+                    else:
+                        # 不同類型需要轉換
+                        # 這裡簡化處理，只處理數值類型轉換
+                        if src_type == "i32" and dst_type == "float":
+                            result += f"    %var_{self.var_counter} = load i32, i32* %{stmt.value.name}\n"
+                            result += f"    %float_{self.var_counter} = sitofp i32 %var_{self.var_counter} to float\n"
+                            result += f"    store float %float_{self.var_counter}, float* %{name}\n"
+                            self.var_counter += 1
+                        elif src_type == "float" and dst_type == "i32":
+                            result += f"    %var_{self.var_counter} = load float, float* %{stmt.value.name}\n"
+                            result += f"    %int_{self.var_counter} = fptosi float %var_{self.var_counter} to i32\n"
+                            result += f"    store i32 %int_{self.var_counter}, i32* %{name}\n"
+                            self.var_counter += 1
+                else:
+                    # 無法確定類型，假設為整數
+                    result += f"    %var_{self.var_counter} = load i32, i32* %{stmt.value.name}\n"
+                    result += f"    store i32 %var_{self.var_counter}, i32* %{name}\n"
+                    self.var_counter += 1
+            elif isinstance(stmt.value, ast_nodes.BinaryExpr):
+                # 處理二元表達式
+                if stmt.value.operator in ['+', '-', '*', '/']:
+                    # 算術運算
+                    result += self._generate_binary_expr(stmt.value, name)
+                elif stmt.value.operator in ['<', '>', '<=', '>=', '==', '!=']:
+                    # 比較運算
+                    result += self._generate_comparison(stmt.value, name)
+            elif isinstance(stmt.value, ast_nodes.UnaryExpr):
+                # 處理一元表達式
+                result += self._generate_unary_expr(stmt.value, name)
+            elif isinstance(stmt.value, ast_nodes.CallExpression) and isinstance(stmt.value.callee, ast_nodes.Variable):
+                # 函數調用
+                if stmt.value.callee.name == "error":
+                    # 處理錯誤創建
+                    result += self._generate_error(stmt.value, name)
         
         return result
 
@@ -738,6 +740,15 @@ class LLVMCodeGenerator(CodeGenerator):
             result += f"    %left_{self.var_counter} = load i32, i32* %{expr.left.name}\n"
             left_val = f"%left_{self.var_counter}"
             self.var_counter += 1
+        elif isinstance(expr.left, ast_nodes.UnaryExpr):
+            # 處理左操作數為一元表達式的情況
+            temp_var = f"unary_temp_{self.var_counter}"
+            self.var_counter += 1
+            result += f"    %{temp_var} = alloca i32\n"
+            result += self._generate_unary_expr(expr.left, temp_var)
+            result += f"    %left_{self.var_counter} = load i32, i32* %{temp_var}\n"
+            left_val = f"%left_{self.var_counter}"
+            self.var_counter += 1
         
         # 右操作數
         right_val = ""
@@ -745,6 +756,15 @@ class LLVMCodeGenerator(CodeGenerator):
             right_val = str(expr.right.value)
         elif isinstance(expr.right, ast_nodes.Variable):
             result += f"    %right_{self.var_counter} = load i32, i32* %{expr.right.name}\n"
+            right_val = f"%right_{self.var_counter}"
+            self.var_counter += 1
+        elif isinstance(expr.right, ast_nodes.UnaryExpr):
+            # 處理右操作數為一元表達式的情況
+            temp_var = f"unary_temp_{self.var_counter}"
+            self.var_counter += 1
+            result += f"    %{temp_var} = alloca i32\n"
+            result += self._generate_unary_expr(expr.right, temp_var)
+            result += f"    %right_{self.var_counter} = load i32, i32* %{temp_var}\n"
             right_val = f"%right_{self.var_counter}"
             self.var_counter += 1
         
@@ -764,6 +784,82 @@ class LLVMCodeGenerator(CodeGenerator):
         
         return result
 
+    def _generate_unary_expr(self, expr, target_var):
+        """生成一元表達式的 LLVM IR 代碼，結果存入目標變量"""
+        result = "    ; 一元表達式\n"
+        
+        # 獲取操作數
+        operand_val = ""
+        operand_type = "i32"  # 默認為整數類型
+        
+        if isinstance(expr.operand, ast_nodes.Number):
+            operand_val = str(expr.operand.value)
+        elif isinstance(expr.operand, ast_nodes.Variable):
+            # 嘗試確定變量類型
+            var_name = expr.operand.name
+            if var_name in self.variables and 'type' in self.variables[var_name]:
+                operand_type = self.variables[var_name]['type']
+            
+            # 加載變量值
+            result += f"    %operand_{self.var_counter} = load {operand_type}, {operand_type}* %{var_name}\n"
+            operand_val = f"%operand_{self.var_counter}"
+            self.var_counter += 1
+        
+        # 執行一元運算
+        if expr.operator == '-':
+            # 負號運算
+            if operand_type == 'i32':
+                result += f"    %result_{self.var_counter} = sub i32 0, {operand_val}\n"
+            elif operand_type == 'float':
+                result += f"    %result_{self.var_counter} = fsub float 0.0, {operand_val}\n"
+            else:
+                # 未知類型，假設為整數
+                result += f"    %result_{self.var_counter} = sub i32 0, {operand_val}\n"
+        
+        elif expr.operator == '!':
+            # 邏輯非運算，操作數應為布爾值
+            if operand_type == 'i1':
+                result += f"    %result_{self.var_counter} = xor i1 {operand_val}, true\n"
+            else:
+                # 如果操作數不是布爾類型，先轉換為布爾值
+                result += f"    %bool_operand_{self.var_counter} = icmp ne {operand_type} {operand_val}, 0\n"
+                result += f"    %result_{self.var_counter} = xor i1 %bool_operand_{self.var_counter}, true\n"
+        
+        elif expr.operator == '~':
+            # 位元取反運算，操作數應為整數
+            if operand_type == 'i32':
+                result += f"    %result_{self.var_counter} = xor i32 {operand_val}, -1\n"
+            else:
+                # 未知類型，假設為整數
+                result += f"    %result_{self.var_counter} = xor i32 {operand_val}, -1\n"
+        
+        else:
+            # 未實現的一元運算符
+            result += f"    ; 未實現的一元運算符: {expr.operator}\n"
+            result += f"    %result_{self.var_counter} = add {operand_type} {operand_val}, 0\n"
+        
+        # 將結果存入目標變量
+        if expr.operator == '!':
+            # 布爾結果可能需要擴展為整數
+            if target_var.startswith('%'):
+                # 臨時變量，直接賦值
+                result += f"    {target_var} = zext i1 %result_{self.var_counter} to i32\n"
+            else:
+                # 具名變量，需要存儲
+                result += f"    %temp_{self.var_counter} = zext i1 %result_{self.var_counter} to i32\n"
+                result += f"    store i32 %temp_{self.var_counter}, i32* %{target_var}\n"
+        else:
+            # 非布爾結果直接存儲
+            if target_var.startswith('%'):
+                # 臨時變量，直接賦值
+                result += f"    {target_var} = add {operand_type} %result_{self.var_counter}, 0\n"
+            else:
+                # 具名變量，需要存儲
+                result += f"    store {operand_type} %result_{self.var_counter}, {operand_type}* %{target_var}\n"
+        
+        self.var_counter += 1
+        return result
+        
     def _generate_template_string(self, template_str, target_var):
         """生成模板字符串的 LLVM IR 代碼，結果存入目標變量"""
         result = "    ; 模板字符串\n"
@@ -821,72 +917,6 @@ class LLVMCodeGenerator(CodeGenerator):
             # 實際實現應該將字符串指針存儲到目標變量中
             result += f"    %str_ptr_{self.var_counter} = ptrtoint i8* %template_src_{self.var_counter} to i32\n"
             result += f"    store i32 %str_ptr_{self.var_counter}, i32* %{target_var}\n"
-            
-            self.var_counter += 1
-        
-        return result
-    
-    def _generate_error(self, expr):
-        """生成 error 函數調用的 LLVM IR 代碼"""
-        result = "    ; 創建一個錯誤\n"
-        
-        if not expr.arguments:
-            return result  # 沒有參數則不處理
-            
-        # 獲取錯誤消息
-        error_msg = expr.arguments[0]
-        if isinstance(error_msg, ast_nodes.StringLiteral):
-            error_str = error_msg.value + "\\00"  # 確保有空終止符
-            str_idx = self._add_global_string(error_str)
-            byte_len = self._get_byte_length(error_str)
-            
-            # 獲取錯誤代碼（如果提供）
-            error_code = 1  # 默認錯誤代碼
-            if len(expr.arguments) > 1 and isinstance(expr.arguments[1], ast_nodes.Number):
-                error_code = expr.arguments[1].value
-                
-            # 創建錯誤對象
-            result += f"    ; 使用錯誤消息 '{error_msg.value}' 和錯誤代碼 {error_code} 創建錯誤\n"
-            
-            # 分配錯誤結構體內存
-            result += f"    %error_obj_{self.var_counter} = alloca %error_t\n"
-            
-            # 設置錯誤代碼
-            result += f"    %error_code_ptr_{self.var_counter} = getelementptr %error_t, %error_t* %error_obj_{self.var_counter}, i32 0, i32 0\n"
-            result += f"    store i32 {error_code}, i32* %error_code_ptr_{self.var_counter}\n"
-            
-            # 設置錯誤消息
-            result += f"    %error_msg_ptr_{self.var_counter} = getelementptr %error_t, %error_t* %error_obj_{self.var_counter}, i32 0, i32 1\n"
-            result += f"    %error_msg_{self.var_counter} = getelementptr inbounds ([{byte_len} x i8], [{byte_len} x i8]* @.str.{str_idx}, i32 0, i32 0)\n"
-            result += f"    store i8* %error_msg_{self.var_counter}, i8** %error_msg_ptr_{self.var_counter}\n"
-            
-            # 返回錯誤對象指針
-            result += f"    %error_ptr_{self.var_counter} = bitcast %error_t* %error_obj_{self.var_counter} to i8*\n"
-            
-            self.var_counter += 1
-        
-        return result
-        
-    def _generate_is_error(self, expr):
-        """生成 is_error 函數調用的 LLVM IR 代碼"""
-        result = "    ; 檢查是否為錯誤\n"
-        
-        if not expr.arguments:
-            return result  # 沒有參數則不處理
-            
-        # 獲取需要檢查的變量
-        var_to_check = expr.arguments[0]
-        if isinstance(var_to_check, ast_nodes.Variable):
-            result += f"    ; 檢查變量 '{var_to_check.name}' 是否為錯誤\n"
-            
-            # 加載變量值
-            result += f"    %check_var_{self.var_counter} = load i8*, i8** %{var_to_check.name}\n"
-            
-            # 檢查變量是否為錯誤（簡化的實現：檢查指針是否為空）
-            result += f"    %is_error_{self.var_counter} = call i1 @is_error_check(i8* %check_var_{self.var_counter})\n"
-            
-            # 返回檢查結果
-            result += f"    %is_error_result_{self.var_counter} = zext i1 %is_error_{self.var_counter} to i32\n"
             
             self.var_counter += 1
         
@@ -963,19 +993,37 @@ class LLVMCodeGenerator(CodeGenerator):
                 result += f"    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([{byte_len} x i8], [{byte_len} x i8]* @.str.{str_idx}, i32 0, i32 0))\n"
             # 第二種情況：字符串字面量 + 變量
             elif isinstance(expr.left, ast_nodes.StringLiteral) and isinstance(expr.right, ast_nodes.Variable):
-                format_str = expr.left.value + "%d\\0A\\00"  # 假設變量是整數
+                # 獲取變量類型
+                var_type = self._get_variable_type(expr.right.name)
+                format_specifier = self._get_format_specifier_for_type(var_type)
+                
+                format_str = expr.left.value + format_specifier + "\\0A\\00"
                 format_str_idx = self._add_global_string(format_str)
                 byte_len = self._get_byte_length(format_str)
-                result += f"    %var_{self.var_counter} = load i32, i32* %{expr.right.name}\n"
-                result += f"    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([{byte_len} x i8], [{byte_len} x i8]* @.str.{format_str_idx}, i32 0, i32 0), i32 %var_{self.var_counter})\n"
+                
+                # 生成加載變量的代碼，根據類型決定
+                result += self._generate_load_variable(expr.right.name, var_type, self.var_counter)
+                
+                # 生成打印調用
+                llvm_type = self._get_llvm_type_for_var_type(var_type)
+                result += f"    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([{byte_len} x i8], [{byte_len} x i8]* @.str.{format_str_idx}, i32 0, i32 0), {llvm_type} %var_{self.var_counter})\n"
                 self.var_counter += 1
             # 第三種情況：變量 + 字符串字面量
             elif isinstance(expr.left, ast_nodes.Variable) and isinstance(expr.right, ast_nodes.StringLiteral):
-                format_str = "%d" + expr.right.value + "\\0A\\00"  # 假設變量是整數
+                # 獲取變量類型
+                var_type = self._get_variable_type(expr.left.name)
+                format_specifier = self._get_format_specifier_for_type(var_type)
+                
+                format_str = format_specifier + expr.right.value + "\\0A\\00"
                 format_str_idx = self._add_global_string(format_str)
                 byte_len = self._get_byte_length(format_str)
-                result += f"    %var_{self.var_counter} = load i32, i32* %{expr.left.name}\n"
-                result += f"    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([{byte_len} x i8], [{byte_len} x i8]* @.str.{format_str_idx}, i32 0, i32 0), i32 %var_{self.var_counter})\n"
+                
+                # 生成加載變量的代碼，根據類型決定
+                result += self._generate_load_variable(expr.left.name, var_type, self.var_counter)
+                
+                # 生成打印調用
+                llvm_type = self._get_llvm_type_for_var_type(var_type)
+                result += f"    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([{byte_len} x i8], [{byte_len} x i8]* @.str.{format_str_idx}, i32 0, i32 0), {llvm_type} %var_{self.var_counter})\n"
                 self.var_counter += 1
             # 第四種情況：處理模板字符串（反引號）
             elif isinstance(expr.left, ast_nodes.StringLiteral) and isinstance(expr.right, ast_nodes.StringLiteral) and hasattr(expr, 'is_template') and expr.is_template:
@@ -1010,12 +1058,18 @@ class LLVMCodeGenerator(CodeGenerator):
                 if parts:
                     format_parts = []
                     var_parts = []
+                    var_types = []
+                    
                     for part_type, part_value in parts:
                         if part_type == "string":
                             format_parts.append(part_value)
                         elif part_type == "var":
-                            format_parts.append("%d")  # 假設變量是整數
+                            # 獲取變量類型並選擇合適的格式化指示符
+                            var_type = self._get_variable_type(part_value)
+                            format_specifier = self._get_format_specifier_for_type(var_type)
+                            format_parts.append(format_specifier)
                             var_parts.append(part_value)
+                            var_types.append(var_type)
                     
                     format_str = "".join(format_parts) + "\\0A\\00"  # 添加換行符和空終止符
                     format_str_idx = self._add_global_string(format_str)
@@ -1023,9 +1077,13 @@ class LLVMCodeGenerator(CodeGenerator):
                     
                     # 加載所有變量
                     var_loads = []
-                    for i, var_name in enumerate(var_parts):
-                        result += f"    %template_var_{self.var_counter}_{i} = load i32, i32* %{var_name}\n"
-                        var_loads.append(f"i32 %template_var_{self.var_counter}_{i}")
+                    for i, (var_name, var_type) in enumerate(zip(var_parts, var_types)):
+                        # 根據變量類型生成適當的加載代碼
+                        result += self._generate_load_variable(var_name, var_type, f"{self.var_counter}_{i}")
+                        
+                        # 添加到參數列表
+                        llvm_type = self._get_llvm_type_for_var_type(var_type)
+                        var_loads.append(f"{llvm_type} %var_{self.var_counter}_{i}")
                     
                     # 生成printf調用
                     printf_args = ", ".join(var_loads)
@@ -1071,12 +1129,18 @@ class LLVMCodeGenerator(CodeGenerator):
             if parts:
                 format_parts = []
                 var_parts = []
+                var_types = []
+                
                 for part_type, part_value in parts:
                     if part_type == "string":
                         format_parts.append(part_value)
                     elif part_type == "var":
-                        format_parts.append("%d")  # 假設變量是整數
+                        # 獲取變量類型並選擇合適的格式化指示符
+                        var_type = self._get_variable_type(part_value)
+                        format_specifier = self._get_format_specifier_for_type(var_type)
+                        format_parts.append(format_specifier)
                         var_parts.append(part_value)
+                        var_types.append(var_type)
                 
                 format_str = "".join(format_parts) + "\\0A\\00"  # 添加換行符和空終止符
                 format_str_idx = self._add_global_string(format_str)
@@ -1084,9 +1148,13 @@ class LLVMCodeGenerator(CodeGenerator):
                 
                 # 加載所有變量
                 var_loads = []
-                for i, var_name in enumerate(var_parts):
-                    result += f"    %template_var_{self.var_counter}_{i} = load i32, i32* %{var_name}\n"
-                    var_loads.append(f"i32 %template_var_{self.var_counter}_{i}")
+                for i, (var_name, var_type) in enumerate(zip(var_parts, var_types)):
+                    # 根據變量類型生成適當的加載代碼
+                    result += self._generate_load_variable(var_name, var_type, f"{self.var_counter}_{i}")
+                    
+                    # 添加到參數列表
+                    llvm_type = self._get_llvm_type_for_var_type(var_type)
+                    var_loads.append(f"{llvm_type} %var_{self.var_counter}_{i}")
                 
                 # 生成printf調用
                 printf_args = ", ".join(var_loads)
@@ -1095,6 +1163,85 @@ class LLVMCodeGenerator(CodeGenerator):
                 self.var_counter += 1
         
         return result
+        
+    def _get_variable_type(self, var_name):
+        """獲取變量的類型"""
+        # 從符號表中獲取變量的實際類型
+        if hasattr(self, 'symbol_table') and self.symbol_table:
+            # 嘗試從符號表中查找變量
+            symbol = self.symbol_table.lookup(var_name)
+            if symbol and hasattr(symbol, 'type'):
+                var_type = symbol.type
+                
+                # 根據Glux類型返回相應的基本類型
+                if var_type.kind == TypeKind.INT:
+                    return "int"
+                elif var_type.kind == TypeKind.FLOAT:
+                    return "float"
+                elif var_type.kind == TypeKind.STRING:
+                    return "string"
+                elif var_type.kind == TypeKind.BOOL:
+                    return "bool"
+        
+        # 無法從符號表確定類型，根據變量名嘗試猜測
+        if var_name.startswith(('is_', 'has_', 'can_', 'should_')):
+            # 以這些前綴開始的變量通常是布爾類型
+            return "bool"
+        elif var_name in self.variables:
+            # 檢查已聲明的變量
+            var_info = self.variables.get(var_name)
+            if var_info and 'type' in var_info:
+                llvm_type = var_info['type']
+                if llvm_type == 'i32':
+                    return "int"
+                elif llvm_type in ('float', 'double'):
+                    return "float"
+                elif llvm_type == 'i8*':
+                    return "string"
+                elif llvm_type == 'i1':
+                    return "bool"
+        
+        # 默認為整數類型
+        return "int"
+    
+    def _get_format_specifier_for_type(self, var_type):
+        """根據變量類型獲取printf格式化指示符"""
+        if var_type == "int":
+            return "%d"
+        elif var_type == "float":
+            return "%f"
+        elif var_type == "string":
+            return "%s"
+        elif var_type == "bool":
+            return "%d"  # 布爾值使用整數格式
+        else:
+            return "%s"  # 默認字符串格式
+    
+    def _get_llvm_type_for_var_type(self, var_type):
+        """根據變量類型獲取LLVM IR類型"""
+        if var_type == "int":
+            return "i32"
+        elif var_type == "float":
+            return "float"
+        elif var_type == "string":
+            return "i8*"
+        elif var_type == "bool":
+            return "i1"
+        else:
+            return "i32"  # 默認整數類型
+    
+    def _generate_load_variable(self, var_name, var_type, counter_suffix):
+        """根據變量類型生成加載變量的LLVM IR代碼"""
+        if var_type == "int":
+            return f"    %var_{counter_suffix} = load i32, i32* %{var_name}\n"
+        elif var_type == "float":
+            return f"    %var_{counter_suffix} = load float, float* %{var_name}\n"
+        elif var_type == "string":
+            return f"    %var_{counter_suffix} = load i8*, i8** %{var_name}\n"
+        elif var_type == "bool":
+            return f"    %var_{counter_suffix} = load i1, i1* %{var_name}\n"
+        else:
+            return f"    %var_{counter_suffix} = load i32, i32* %{var_name}\n"  # 默認整數類型
 
     def _generate_string_interpolation_var(self, interpolation, target_var):
         """為字符串插值生成代碼並將結果存入目標變量"""
@@ -1103,6 +1250,7 @@ class LLVMCodeGenerator(CodeGenerator):
         # 處理字符串插值的不同部分
         format_parts = []
         var_names = []
+        var_types = []
         
         for part in interpolation.parts:
             if isinstance(part, ast_nodes.StringLiteral):
@@ -1110,8 +1258,26 @@ class LLVMCodeGenerator(CodeGenerator):
                 format_parts.append(part.value)
             elif isinstance(part, ast_nodes.Variable):
                 # 變量部分
-                format_parts.append("%d")  # 假設變量是整數
+                var_type = self._get_variable_type(part.name)
+                format_specifier = self._get_format_specifier_for_type(var_type)
+                format_parts.append(format_specifier)
                 var_names.append(part.name)
+                var_types.append(var_type)
+            elif isinstance(part, ast_nodes.CallExpression) and isinstance(part.callee, ast_nodes.Variable) and part.callee.name == "string":
+                # 處理 string(expr) 調用
+                if part.arguments and isinstance(part.arguments[0], ast_nodes.Variable):
+                    var_name = part.arguments[0].name
+                    var_type = self._get_variable_type(var_name)
+                    format_specifier = self._get_format_specifier_for_type(var_type)
+                    format_parts.append(format_specifier)
+                    var_names.append(var_name)
+                    var_types.append(var_type)
+                else:
+                    # 非變量表達式，先假設為字符串
+                    format_parts.append("%s")
+                    # 需要生成代碼計算表達式值，這裡簡化處理
+                    var_names.append("unknown")
+                    var_types.append("string")
         
         # 生成格式化字符串
         format_str = "".join(format_parts) + "\\00"
@@ -1121,34 +1287,36 @@ class LLVMCodeGenerator(CodeGenerator):
         # 如果沒有變量插值，直接使用常量字符串
         if not var_names:
             result += f"    %str_ptr_{self.var_counter} = getelementptr inbounds ([{byte_len} x i8], [{byte_len} x i8]* @.str.{format_str_idx}, i32 0, i32 0)\n"
-            result += f"    %str_val_{self.var_counter} = ptrtoint i8* %str_ptr_{self.var_counter} to i32\n"
-            result += f"    store i32 %str_val_{self.var_counter}, i32* %{target_var}\n"
+            result += f"    store i8* %str_ptr_{self.var_counter}, i8** %{target_var}\n"
             self.var_counter += 1
             return result
         
         # 為插值變量分配內存空間
         temp_buffer_size = 256  # 假設緩衝區大小足夠
         result += f"    %temp_buffer_{self.var_counter} = alloca [{temp_buffer_size} x i8]\n"
-        result += f"    %buffer_ptr_{self.var_counter} = getelementptr inbounds [{temp_buffer_size} x i8], [{temp_buffer_size} x i8]* %temp_buffer_{self.var_counter}, i32 0, i32 0)\n"
+        result += f"    %buffer_ptr_{self.var_counter} = getelementptr inbounds [{temp_buffer_size} x i8], [{temp_buffer_size} x i8]* %temp_buffer_{self.var_counter}, i32 0, i32 0\n"
         
         # 獲取格式字符串指針
         result += f"    %format_ptr_{self.var_counter} = getelementptr inbounds ([{byte_len} x i8], [{byte_len} x i8]* @.str.{format_str_idx}, i32 0, i32 0)\n"
         
         # 加載所有變量
         var_loads = []
-        for i, var_name in enumerate(var_names):
-            result += f"    %interp_var_{self.var_counter}_{i} = load i32, i32* %{var_name}\n"
-            var_loads.append(f"i32 %interp_var_{self.var_counter}_{i}")
+        for i, (var_name, var_type) in enumerate(zip(var_names, var_types)):
+            if var_name != "unknown":  # 跳過無法處理的表達式
+                # 根據變量類型生成加載代碼
+                result += self._generate_load_variable(var_name, var_type, f"interp_{self.var_counter}_{i}")
+                
+                # 添加到參數列表
+                llvm_type = self._get_llvm_type_for_var_type(var_type)
+                var_loads.append(f"{llvm_type} %var_interp_{self.var_counter}_{i}")
         
         # 使用 sprintf 格式化字符串
         printf_args = ", ".join(var_loads)
-        # 簡化實現：這裡我們實際上應該使用 sprintf，但為了簡單，我們直接設置指針
-        result += f"    ; 在這裡應該調用 sprintf 來格式化字符串，但我們簡化處理\n"
-        result += f"    ; sprintf(%buffer_ptr_{self.var_counter}, %format_ptr_{self.var_counter}, {printf_args})\n"
+        # 添加對 sprintf 的調用
+        result += f"    call i32 (i8*, i8*, ...) @sprintf(i8* %buffer_ptr_{self.var_counter}, i8* %format_ptr_{self.var_counter}{', ' + printf_args if printf_args else ''})\n"
         
-        # 直接將格式字符串指針存儲到變量中
-        result += f"    %str_val_{self.var_counter} = ptrtoint i8* %format_ptr_{self.var_counter} to i32\n"
-        result += f"    store i32 %str_val_{self.var_counter}, i32* %{target_var}\n"
+        # 將格式化後的字符串存儲到目標變量
+        result += f"    store i8* %buffer_ptr_{self.var_counter}, i8** %{target_var}\n"
         
         self.var_counter += 1
         
@@ -1449,6 +1617,76 @@ class LLVMCodeGenerator(CodeGenerator):
         
         # 如果不是元組成員訪問，可以在這裡實現其他類型的成員訪問
         result += "    ; 未實現的成員訪問類型\n"
+        
+        return result
+
+    def _generate_error(self, expr, target_var=None):
+        """生成 error 函數調用的 LLVM IR 代碼"""
+        result = "    ; 創建一個錯誤\n"
+        
+        if not expr.arguments:
+            return result  # 沒有參數則不處理
+            
+        # 獲取錯誤消息
+        error_msg = expr.arguments[0]
+        if isinstance(error_msg, ast_nodes.StringLiteral):
+            error_str = error_msg.value + "\\00"  # 確保有空終止符
+            str_idx = self._add_global_string(error_str)
+            byte_len = self._get_byte_length(error_str)
+            
+            # 獲取錯誤代碼（如果提供）
+            error_code = 1  # 默認錯誤代碼
+            if len(expr.arguments) > 1 and isinstance(expr.arguments[1], ast_nodes.Number):
+                error_code = expr.arguments[1].value
+                
+            # 創建錯誤對象
+            result += f"    ; 使用錯誤消息 '{error_msg.value}' 和錯誤代碼 {error_code} 創建錯誤\n"
+            
+            # 分配錯誤結構體內存
+            result += f"    %error_obj_{self.var_counter} = alloca %error_t\n"
+            
+            # 設置錯誤代碼
+            result += f"    %error_code_ptr_{self.var_counter} = getelementptr %error_t, %error_t* %error_obj_{self.var_counter}, i32 0, i32 0\n"
+            result += f"    store i32 {error_code}, i32* %error_code_ptr_{self.var_counter}\n"
+            
+            # 設置錯誤消息
+            result += f"    %error_msg_ptr_{self.var_counter} = getelementptr %error_t, %error_t* %error_obj_{self.var_counter}, i32 0, i32 1\n"
+            result += f"    %error_msg_{self.var_counter} = getelementptr inbounds ([{byte_len} x i8], [{byte_len} x i8]* @.str.{str_idx}, i32 0, i32 0)\n"
+            result += f"    store i8* %error_msg_{self.var_counter}, i8** %error_msg_ptr_{self.var_counter}\n"
+            
+            # 返回錯誤對象指針
+            result += f"    %error_ptr_{self.var_counter} = bitcast %error_t* %error_obj_{self.var_counter} to i8*\n"
+            
+            # 如果提供了目標變量，則存儲結果
+            if target_var:
+                result += f"    store i8* %error_ptr_{self.var_counter}, i8** %{target_var}\n"
+            
+            self.var_counter += 1
+        
+        return result
+        
+    def _generate_is_error(self, expr):
+        """生成 is_error 函數調用的 LLVM IR 代碼"""
+        result = "    ; 檢查是否為錯誤\n"
+        
+        if not expr.arguments:
+            return result  # 沒有參數則不處理
+            
+        # 獲取需要檢查的變量
+        var_to_check = expr.arguments[0]
+        if isinstance(var_to_check, ast_nodes.Variable):
+            result += f"    ; 檢查變量 '{var_to_check.name}' 是否為錯誤\n"
+            
+            # 加載變量值
+            result += f"    %check_var_{self.var_counter} = load i8*, i8** %{var_to_check.name}\n"
+            
+            # 檢查變量是否為錯誤（簡化的實現：檢查指針是否為空）
+            result += f"    %is_error_{self.var_counter} = call i1 @is_error_check(i8* %check_var_{self.var_counter})\n"
+            
+            # 返回檢查結果
+            result += f"    %is_error_result_{self.var_counter} = zext i1 %is_error_{self.var_counter} to i32\n"
+            
+            self.var_counter += 1
         
         return result
 

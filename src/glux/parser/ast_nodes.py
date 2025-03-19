@@ -915,4 +915,26 @@ class ConditionalExpression(Expression):
         self.else_expr = else_expr
     
     def __repr__(self) -> str:
-        return f"({self.condition} ? {self.then_expr} : {self.else_expr})" 
+        return f"({self.condition} ? {self.then_expr} : {self.else_expr})"
+
+
+class TemplateLiteral(ASTNode):
+    def __init__(self, value, location=None):
+        super().__init__(location)
+        self.value = value  # 模板字符串值
+        
+    def __str__(self):
+        return f"TemplateLiteral(\"{self.value}\")"
+
+
+class LambdaExpression(Expression):
+    def __init__(self, parameters, return_type, body, location=None):
+        super().__init__(location)
+        self.parameters = parameters  # List[Parameter]
+        self.return_type = return_type  # TypeExpression or None
+        self.body = body  # BlockStatement
+        
+    def __str__(self):
+        params_str = ", ".join(str(param) for param in self.parameters)
+        return_type_str = f" -> {self.return_type}" if self.return_type else ""
+        return f"fn({params_str}){return_type_str} {self.body}" 

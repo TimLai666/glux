@@ -8,6 +8,8 @@ import os
 import sys
 import argparse
 import logging
+import time
+import traceback
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Union, Tuple
 
@@ -237,6 +239,95 @@ class GluxCompiler:
             self.logger.error(f"無法讀取文件 {file_path}: {e}")
             return None
 
+    def run(self, filename: str, options: Dict[str, Any] = None):
+        """運行編譯器流程"""
+        if options is None:
+            options = {}
+        
+        start_time = time.time()
+        
+        # 讀取源文件
+        try:
+            with open(filename, 'r', encoding='utf-8') as file:
+                source = file.read()
+        except Exception as e:
+            self.logger.error(f"無法讀取源文件 {filename}: {e}")
+            return False, None
+        
+        # 詞法分析階段
+        lexer = Lexer(source, filename=filename, logger=self.logger)
+        try:
+            self.logger.info(f"開始詞法分析 {filename}")
+            tokens = lexer.tokenize()
+            if options.get('debug_tokens', False):
+                for token in tokens:
+                    self.logger.debug(f"Token: {token}")
+        except Exception as e:
+            self.logger.error(f"詞法分析失敗: {e}")
+            return False, None
+        
+        # 語法分析階段
+        parser = Parser(tokens, filename=filename, logger=self.logger)
+        try:
+            self.logger.info("開始語法分析")
+            ast = parser.parse()
+            if options.get('debug_ast', False):
+                # 動態導入ASTPrinter以避免循環導入
+                from .parser.ast_printer import ASTPrinter
+                ast_printer = ASTPrinter()
+                ast_printer.print(ast)
+        except Exception as e:
+            self.logger.error(f"語法分析失敗: {e}")
+            traceback.print_exc()
+            return False, None
+        
+        # 語義分析階段
+        try:
+            self.logger.info("開始語義分析")
+            semantic_analyzer = SemanticAnalyzer(logger=self.logger)
+            result, symbol_table = semantic_analyzer.analyze(ast)
+            
+            if not result:
+                self.logger.error("語義分析失敗")
+                return False, None
+            
+            self.logger.info("語義分析完成")
+            
+            if options.get('debug_symbols', False):
+                self.logger.debug("符號表內容:")
+                for scope in symbol_table.scopes:
+                    for name, symbol in scope.symbols.items():
+                        self.logger.debug(f"  {name}: {symbol.type}")
+        except Exception as e:
+            self.logger.error(f"語義分析過程中發生錯誤: {e}")
+            traceback.print_exc()
+            return False, None
+        
+        # 代碼生成階段
+        try:
+            self.logger.info("開始代碼生成")
+            code_generator = LLVMCodeGenerator(logger=self.logger)
+            
+            # 將符號表傳遞給代碼生成器
+            code_generator.set_symbol_table(symbol_table)
+            
+            llvm_ir = code_generator.generate(ast)
+            
+            # 保存 LLVM IR 到文件
+            output_file = os.path.splitext(filename)[0] + ".ll"
+            with open(output_file, 'w') as f:
+                f.write(llvm_ir)
+            
+            self.logger.info(f"代碼生成完成，LLVM IR 已保存到 {output_file}")
+            end_time = time.time()
+            self.logger.info(f"編譯耗時: {end_time - start_time:.2f} 秒")
+            
+            return True, output_file
+        except Exception as e:
+            self.logger.error(f"代碼生成失敗: {e}")
+            traceback.print_exc()
+            return False, None
+
 
 def main():
     """Glux 編譯器主入口"""
@@ -323,26 +414,30 @@ def main():
             # JIT 模式
             if args.jit:
                 logger.info("使用 JIT 直接執行 LLVM IR...")
-                from .utils.ir_executor import execute_llvm_ir
-                exit_code = execute_llvm_ir(llvm_ir)
-                sys.exit(exit_code)
+                try:
+                    from .utils.ir_executor import execute_llvm_ir
+                    exit_code = execute_llvm_ir(llvm_ir)
+                    sys.exit(exit_code)
+                except Exception as e:
+                    logger.error(f"JIT 執行失敗: {str(e)}")
+                    logger.info("嘗試使用傳統方式生成並執行二進制檔案...")
+            
             # 傳統模式
-            else:
-                logger.info("生成並執行二進制檔案...")
-                binary_emitter = BinaryEmitter(ast, output_file)
-                binary_file = binary_emitter.emit()
-                
-                if binary_emitter.errors:
-                    logger.error("代碼生成錯誤:")
-                    for error in binary_emitter.errors:
-                        logger.error(f"  {error}")
-                    sys.exit(1)
-                
-                logger.info(f"生成二進制文件: {binary_file}")
-                logger.info("執行程式...")
-                os.chmod(binary_file, 0o755)  # 設為可執行
-                exit_code = os.system(binary_file)
-                sys.exit(exit_code >> 8)  # 提取實際退出碼
+            logger.info("生成並執行二進制檔案...")
+            binary_emitter = BinaryEmitter(ast, output_file)
+            binary_file = binary_emitter.emit()
+            
+            if binary_emitter.errors:
+                logger.error("代碼生成錯誤:")
+                for error in binary_emitter.errors:
+                    logger.error(f"  {error}")
+                sys.exit(1)
+            
+            logger.info(f"生成二進制文件: {binary_file}")
+            logger.info("執行程式...")
+            os.chmod(binary_file, 0o755)  # 設為可執行
+            exit_code = os.system(binary_file)
+            sys.exit(exit_code >> 8)  # 提取實際退出碼
         
     except Exception as e:
         logger.error(f"發生錯誤: {str(e)}", exc_info=args.verbose)
