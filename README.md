@@ -25,32 +25,49 @@ Glux 是一個現代化的程式語言，專注於提供安全、高效和易用
 
 ### 基本使用
 
-1. 編譯並執行程式：
+1. 編譯並執行程式 (使用JIT模式)：
    ```bash
-   python main <檔案路徑> -j
+   python main.py run <檔案路徑>
    ```
    例如：
    ```bash
-   python3 -m src.glux.main tests/examples/test_basic.glux -j
+   python main.py run examples/hello.glux
    ```
 
-2. 只檢查語法和語義：
+2. 編譯為可執行檔案：
    ```bash
-   python main <檔案路徑> -c
+   python main.py build -o <輸出檔案名> <檔案路徑>
+   ```
+   例如：
+   ```bash
+   python main.py build -o hello examples/hello.glux
    ```
 
-3. 生成 LLVM IR：
+3. 傳遞參數給程式：
    ```bash
-   python main <檔案路徑> -i
+   python main.py run <檔案路徑> -- <參數1> <參數2> ...
    ```
 
 ### 命令列選項
 
-- `-j` 或 `--jit`：使用 JIT 模式直接執行 LLVM IR
-- `-c` 或 `--check`：只進行語法和語義檢查
-- `-i` 或 `--ir`：生成 LLVM IR 並保存到文件
+#### `run` 子命令
 - `-v` 或 `--verbose`：顯示詳細的編譯過程
+- `--args`：在 `--` 之後傳遞參數給程式
+
+#### `build` 子命令
 - `-o` 或 `--output`：指定輸出文件路徑
+- `-v` 或 `--verbose`：顯示詳細的編譯過程
+
+### 向後兼容性
+
+為了保持向後兼容，仍然支持以下舊的命令形式：
+
+```bash
+python main.py <檔案路徑>           # 直接執行 (使用JIT模式)
+python main.py -c -o <輸出檔案> <檔案路徑>  # 編譯為可執行檔案
+```
+
+但建議使用新的子命令形式，更加直觀。
 
 ## 語言特性
 

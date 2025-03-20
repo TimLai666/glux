@@ -322,12 +322,25 @@ def main():
     
     # 創建命令行參數解析器
     parser = argparse.ArgumentParser(description='Glux 編譯器')
+    subparsers = parser.add_subparsers(dest='command', help='子命令')
     
-    # 添加參數
-    parser.add_argument('file', help='源文件路徑')
-    parser.add_argument('-o', '--output', help='輸出文件路徑')
+    # 添加 run 命令
+    run_parser = subparsers.add_parser('run', help='編譯並執行程式')
+    run_parser.add_argument('source', help='源文件路徑')
+    run_parser.add_argument('-v', '--verbose', action='store_true', help='詳細日誌')
+    run_parser.add_argument('--args', nargs=argparse.REMAINDER, help='程序參數 (在 -- 之後)')
+    
+    # 添加 build 命令
+    build_parser = subparsers.add_parser('build', help='編譯為可執行檔案')
+    build_parser.add_argument('source', help='源文件路徑')
+    build_parser.add_argument('-o', '--output', help='輸出文件路徑')
+    build_parser.add_argument('-v', '--verbose', action='store_true', help='詳細日誌')
+    
+    # 為了向後兼容，保留舊的選項
+    parser.add_argument('file', nargs='?', help='源文件路徑 (舊接口)')
+    parser.add_argument('-o', '--output', help='輸出文件路徑 (與 -c 一起使用)')
     parser.add_argument('-v', '--verbose', action='store_true', help='詳細日誌')
-    parser.add_argument('-r', '--run', action='store_true', help='編譯並執行')
+    parser.add_argument('-r', '--run', action='store_true', help='編譯並執行 (默認行為)')
     parser.add_argument('-c', '--compile', action='store_true', help='只編譯，不執行')
     parser.add_argument('-j', '--jit', action='store_true', help='使用 JIT 直接執行 (不需要生成二進制檔案)')
     parser.add_argument('--args', nargs=argparse.REMAINDER, help='程序參數 (在 -- 之後)')
@@ -342,34 +355,44 @@ def main():
     # 獲取編譯器實例
     compiler = GluxCompiler(args.verbose)
     
-    # 獲取文件路徑
-    file_path = args.file
-    
-    # 檢查文件是否存在
-    if not os.path.exists(file_path):
-        logger.error(f"文件不存在: {file_path}")
-        return 1
-    
-    # 獲取輸出文件路徑
-    output_path = args.output
-    if not output_path and args.compile:
-        # 默認輸出文件路徑
-        base_name = os.path.splitext(os.path.basename(file_path))[0]
-        output_path = os.path.join(os.path.dirname(file_path), base_name)
-        # 添加平台相關的可執行文件擴展名
-        if platform.system() == 'Windows':
-            output_path += '.exe'
-    
-    # 獲取程序參數
-    program_args = args.args or []
-    
-    # 設置環境變量
-    if args.jit:
+    # 處理新的子命令
+    if args.command == 'run':
+        # 執行 run 命令
+        file_path = args.source
+        if not os.path.exists(file_path):
+            logger.error(f"文件不存在: {file_path}")
+            return 1
+            
+        # 設置環境變量 - 預設使用JIT模式
         os.environ["GLUX_JIT_ONLY"] = "1"
-    
-    # 執行操作
-    if args.compile:
-        # 只編譯，不執行
+            
+        # 獲取程序參數
+        program_args = args.args or []
+        
+        # 編譯並執行
+        logger.info(f"執行文件: {file_path}")
+        exit_code = compiler.run_file(file_path, program_args)
+        logger.info(f"程序退出，退出碼: {exit_code}")
+        return exit_code
+        
+    elif args.command == 'build':
+        # 執行 build 命令
+        file_path = args.source
+        if not os.path.exists(file_path):
+            logger.error(f"文件不存在: {file_path}")
+            return 1
+            
+        # 獲取輸出文件路徑
+        output_path = args.output
+        if not output_path:
+            # 默認輸出文件路徑
+            base_name = os.path.splitext(os.path.basename(file_path))[0]
+            output_path = os.path.join(os.path.dirname(file_path), base_name)
+            # 添加平台相關的可執行文件擴展名
+            if platform.system() == 'Windows':
+                output_path += '.exe'
+                
+        # 編譯
         logger.info(f"編譯文件: {file_path}")
         if compiler.compile_file(file_path, output_path):
             logger.info(f"編譯成功: {output_path}")
@@ -377,12 +400,53 @@ def main():
         else:
             logger.error("編譯失敗")
             return 1
+    
+    # 舊接口的兼容處理
+    elif args.file:
+        # 獲取文件路徑
+        file_path = args.file
+        
+        # 檢查文件是否存在
+        if not os.path.exists(file_path):
+            logger.error(f"文件不存在: {file_path}")
+            return 1
+        
+        # 獲取輸出文件路徑
+        output_path = args.output
+        if not output_path and args.compile:
+            # 默認輸出文件路徑
+            base_name = os.path.splitext(os.path.basename(file_path))[0]
+            output_path = os.path.join(os.path.dirname(file_path), base_name)
+            # 添加平台相關的可執行文件擴展名
+            if platform.system() == 'Windows':
+                output_path += '.exe'
+        
+        # 獲取程序參數
+        program_args = args.args or []
+        
+        # 設置環境變量 - 預設使用JIT模式
+        os.environ["GLUX_JIT_ONLY"] = "1"
+        
+        # 執行操作
+        if args.compile:
+            # 只編譯，不執行
+            logger.info(f"編譯文件: {file_path}")
+            if compiler.compile_file(file_path, output_path):
+                logger.info(f"編譯成功: {output_path}")
+                return 0
+            else:
+                logger.error("編譯失敗")
+                return 1
+        else:
+            # 編譯並執行
+            logger.info(f"執行文件: {file_path}")
+            exit_code = compiler.run_file(file_path, program_args)
+            logger.info(f"程序退出，退出碼: {exit_code}")
+            return exit_code
     else:
-        # 編譯並執行
-        logger.info(f"執行文件: {file_path}")
-        exit_code = compiler.run_file(file_path, program_args)
-        logger.info(f"程序退出，退出碼: {exit_code}")
-        return exit_code
+        # 顯示幫助信息
+        parser.print_help()
+        return 0
 
 
 if __name__ == "__main__":

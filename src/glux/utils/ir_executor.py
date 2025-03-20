@@ -36,17 +36,17 @@ class IRExecutor:
         self.errors = []
         
         # 嘗試導入llvmlite以支持JIT編譯
-        self.llvmlite_available = False
+        self.llvm = None
         try:
             # 初始化LLVM
+            self.llvm = llvm
             llvm.initialize()
             llvm.initialize_native_target()
             llvm.initialize_native_asmprinter()
-            self.llvmlite_available = True
-            self.llvm = llvm
             self.logger.info("成功初始化LLVM綁定")
-        except ImportError:
-            self.logger.warning("未安裝llvmlite，將使用外部工具執行LLVM IR")
+        except Exception as e:
+            self.logger.warning(f"初始化LLVM時發生錯誤: {str(e)}")
+            self.llvm = None
     
     def execute(self, file_or_ir: str, args: List[str] = None, is_ir: bool = False) -> Tuple[int, str, str]:
         """
@@ -104,7 +104,7 @@ class IRExecutor:
             退出碼, 標準輸出, 標準錯誤
         """
         # 檢查是否支持JIT
-        if not self.llvmlite_available:
+        if not self.llvm:
             self.logger.error("未安裝llvmlite，無法使用JIT執行")
             return 1, "", "未安裝llvmlite，無法使用JIT執行"
         
@@ -122,8 +122,14 @@ class IRExecutor:
             target_machine = self.llvm.Target.from_default_triple().create_target_machine()
             engine = self.llvm.create_mcjit_compiler(ir_module, target_machine)
             
-            # 添加全局映射以支持外部函數
-            self.llvm.load_library_permanently(None)  # 加載本進程符號
+            # 嘗試添加全局映射以支持外部函數
+            try:
+                # 在macOS上，直接使用None或空字符串可能會失敗
+                # 我們跳過這一步，因為大多數Glux程序不需要直接調用外部函數
+                # 註釋掉這一行： self.llvm.load_library_permanently('')
+                pass
+            except Exception as e:
+                self.logger.warning(f"載入進程符號失敗，但繼續執行: {str(e)}")
             
             # 設置環境變量以傳遞參數
             old_environ = os.environ.copy()
