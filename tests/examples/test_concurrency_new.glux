@@ -16,8 +16,7 @@ fn get_message() -> string {
     return "Hello, Glux!"
 }
 
-// 主函數
-fn main() {
+main {
     println("程式開始執行")
     
     // 啟動兩個併發任務

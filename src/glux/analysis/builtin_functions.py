@@ -44,7 +44,7 @@ BUILTIN_FUNCTIONS = {
     "error": {
         "return_type": "error",
         "params": [{"name": "message", "type": "string"}],
-        "description": "創建一個錯誤對象"
+        "description": "創建一個錯誤物件"
     },
     "is_error": {
         "return_type": "bool",

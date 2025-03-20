@@ -1,6 +1,6 @@
 // 測試三元運算符
 
-fn main() {
+main {
     x := 10
     result := x > 5 ? "大於5" : "不大於5"
     println(result)  // 應輸出 "大於5"

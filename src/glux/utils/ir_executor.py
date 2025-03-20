@@ -5,8 +5,17 @@ LLVM IR 執行與保存功能
 import os
 import ctypes
 import logging
-from typing import Optional, Any, List
+import subprocess
+import tempfile
+from typing import Optional, Any, List, Tuple
 from llvmlite import binding
+
+# 嘗試導入 LLVM Python 綁定
+try:
+    import llvmlite.binding as llvm
+    LLVMLITE_AVAILABLE = True
+except ImportError:
+    LLVMLITE_AVAILABLE = False
 
 
 class IRExecutor:
@@ -15,47 +24,234 @@ class IRExecutor:
     負責執行和管理 LLVM IR
     """
     
-    def __init__(self, binary_file: str, logger: Optional[logging.Logger] = None):
+    def __init__(self, binary_file: str = None):
         """
-        初始化 IR 執行器
+        初始化執行器
         
         Args:
-            binary_file: 二進制文件路徑
-            logger: 日誌器
+            binary_file: 可選的二進制文件路徑
         """
         self.binary_file = binary_file
-        self.logger = logger or logging.getLogger("IRExecutor")
+        self.logger = logging.getLogger("IRExecutor")
+        self.errors = []
+        
+        # 嘗試導入llvmlite以支持JIT編譯
+        self.llvmlite_available = False
+        try:
+            # 初始化LLVM
+            llvm.initialize()
+            llvm.initialize_native_target()
+            llvm.initialize_native_asmprinter()
+            self.llvmlite_available = True
+            self.llvm = llvm
+            self.logger.info("成功初始化LLVM綁定")
+        except ImportError:
+            self.logger.warning("未安裝llvmlite，將使用外部工具執行LLVM IR")
     
-    def execute(self, function_name: str = "main", args: List[str] = None) -> int:
+    def execute(self, file_or_ir: str, args: List[str] = None, is_ir: bool = False) -> Tuple[int, str, str]:
         """
-        執行指定函數
+        執行LLVM IR或二進制文件
         
         Args:
-            function_name: 函數名稱
-            args: 函數參數
-            
+            file_or_ir: LLVM IR字符串或文件路徑
+            args: 命令行參數
+            is_ir: 指示傳入的是LLVM IR字符串還是文件路徑
+        
         Returns:
-            執行結果代碼
+            退出碼, 標準輸出, 標準錯誤
         """
-        import subprocess
+        args = args or []
+        
+        # 判斷是否為LLVM IR
+        if is_ir or (not is_ir and self._is_llvm_ir(file_or_ir)):
+            return self._execute_llvm_ir(file_or_ir, args, is_ir)
+        else:
+            return self._execute_binary(file_or_ir, args)
+    
+    def _is_llvm_ir(self, file_path: str) -> bool:
+        """
+        檢查文件是否為LLVM IR
+        
+        Args:
+            file_path: 文件路徑
+        
+        Returns:
+            是否為LLVM IR文件
+        """
+        # 檢查文件擴展名
+        if file_path.endswith('.ll'):
+            return True
+        
+        # 讀取文件前幾行，檢查是否包含LLVM IR特徵
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                first_lines = ''.join([f.readline() for _ in range(5)])
+                return 'target datalayout' in first_lines or 'target triple' in first_lines
+        except Exception as e:
+            self.logger.error(f"讀取文件失敗: {str(e)}")
+            return False
+    
+    def _execute_llvm_ir(self, ir_or_file: str, args: List[str], is_ir_content: bool = False) -> Tuple[int, str, str]:
+        """
+        使用JIT執行LLVM IR
+        
+        Args:
+            ir_or_file: LLVM IR字符串或文件路徑
+            args: 命令行參數
+            is_ir_content: 指示傳入的是LLVM IR字符串還是文件路徑
+        
+        Returns:
+            退出碼, 標準輸出, 標準錯誤
+        """
+        # 檢查是否支持JIT
+        if not self.llvmlite_available:
+            self.logger.error("未安裝llvmlite，無法使用JIT執行")
+            return 1, "", "未安裝llvmlite，無法使用JIT執行"
         
         try:
-            args = args or []
-            cmd = [self.binary_file] + args
-            self.logger.debug(f"執行命令: {' '.join(cmd)}")
+            # 獲取IR內容
+            ir_content = ir_or_file if is_ir_content else self._read_file(ir_or_file)
+            if not ir_content:
+                return 1, "", "無法讀取LLVM IR內容"
             
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            # 使用llvmlite解析IR
+            ir_module = self.llvm.parse_assembly(ir_content)
+            ir_module.verify()
             
-            if result.stdout:
-                print(result.stdout)
+            # 創建執行引擎
+            target_machine = self.llvm.Target.from_default_triple().create_target_machine()
+            engine = self.llvm.create_mcjit_compiler(ir_module, target_machine)
             
-            if result.stderr:
-                self.logger.error(f"執行錯誤: {result.stderr}")
+            # 添加全局映射以支持外部函數
+            self.llvm.load_library_permanently(None)  # 加載本進程符號
             
-            return result.returncode
+            # 設置環境變量以傳遞參數
+            old_environ = os.environ.copy()
+            try:
+                # 將參數設置為環境變量
+                os.environ["GLUX_ARG_COUNT"] = str(len(args))
+                for i, arg in enumerate(args):
+                    os.environ[f"GLUX_ARG_{i}"] = arg
+                
+                # 重定向標準輸出和錯誤
+                with tempfile.NamedTemporaryFile(delete=False, mode='w+') as stdout_file, \
+                     tempfile.NamedTemporaryFile(delete=False, mode='w+') as stderr_file:
+                    
+                    stdout_path, stderr_path = stdout_file.name, stderr_file.name
+                    
+                    # 保存原始文件描述符
+                    old_stdout_fd = os.dup(1)
+                    old_stderr_fd = os.dup(2)
+                    
+                    # 重定向到臨時文件
+                    os.dup2(stdout_file.fileno(), 1)
+                    os.dup2(stderr_file.fileno(), 2)
+                    
+                    try:
+                        # 獲取主函數地址並執行
+                        main_addr = engine.get_function_address("main")
+                        import ctypes
+                        cfunc = ctypes.CFUNCTYPE(ctypes.c_int)(main_addr)
+                        exit_code = cfunc()
+                    finally:
+                        # 恢復標準輸出和錯誤
+                        os.dup2(old_stdout_fd, 1)
+                        os.dup2(old_stderr_fd, 2)
+                        os.close(old_stdout_fd)
+                        os.close(old_stderr_fd)
+                
+                # 讀取捕獲的輸出
+                with open(stdout_path, 'r') as f:
+                    stdout = f.read()
+                with open(stderr_path, 'r') as f:
+                    stderr = f.read()
+                
+                # 清理臨時文件
+                try:
+                    os.unlink(stdout_path)
+                    os.unlink(stderr_path)
+                except:
+                    pass
+                
+                return exit_code, stdout, stderr
+            finally:
+                # 恢復原始環境變量
+                os.environ.clear()
+                os.environ.update(old_environ)
+                
         except Exception as e:
-            self.logger.error(f"執行過程中發生錯誤: {str(e)}")
-            return -1
+            self.logger.error(f"執行LLVM IR時發生錯誤: {str(e)}")
+            import traceback
+            error_details = traceback.format_exc()
+            self.logger.debug(error_details)
+            return 1, "", f"執行LLVM IR時發生錯誤: {str(e)}\n{error_details}"
+    
+    def _execute_binary(self, binary_path: str, args: List[str]) -> Tuple[int, str, str]:
+        """
+        執行二進制文件
+        
+        Args:
+            binary_path: 二進制文件路徑
+            args: 命令行參數
+        
+        Returns:
+            退出碼, 標準輸出, 標準錯誤
+        """
+        # 檢查文件是否存在
+        if not os.path.exists(binary_path):
+            self.logger.error(f"二進制文件不存在: {binary_path}")
+            return 1, "", f"二進制文件不存在: {binary_path}"
+        
+        # 檢查是否可執行
+        if not os.access(binary_path, os.X_OK):
+            self.logger.warning(f"文件不可執行，嘗試設置執行權限: {binary_path}")
+            try:
+                os.chmod(binary_path, 0o755)
+            except Exception as e:
+                self.logger.error(f"無法設置執行權限: {str(e)}")
+                return 1, "", f"無法設置執行權限: {str(e)}"
+        
+        try:
+            # 執行二進制文件
+            command = [binary_path] + args
+            self.logger.info(f"執行命令: {' '.join(command)}")
+            
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            stdout, stderr = process.communicate()
+            exit_code = process.returncode
+            
+            self.logger.info(f"程序退出，退出碼: {exit_code}")
+            return exit_code, stdout, stderr
+            
+        except Exception as e:
+            self.logger.error(f"執行二進制文件時發生錯誤: {str(e)}")
+            import traceback
+            error_details = traceback.format_exc()
+            self.logger.debug(error_details)
+            return 1, "", f"執行二進制文件時發生錯誤: {str(e)}\n{error_details}"
+    
+    def _read_file(self, file_path: str) -> Optional[str]:
+        """
+        讀取文件內容
+        
+        Args:
+            file_path: 文件路徑
+        
+        Returns:
+            文件內容，如果讀取失敗則返回None
+        """
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        except Exception as e:
+            self.logger.error(f"無法讀取文件 {file_path}: {str(e)}")
+            return None
 
 
 def save_llvm_ir(llvm_ir: Any, filename: str) -> None:

@@ -112,8 +112,8 @@ fn risky_task(n: int) -> union<int, error> {
     return n * n
 }
 
-// 主函數包含測試邏輯
-fn main() {
+
+main {
     // 基本併發
     spawn task1()
     spawn task2()

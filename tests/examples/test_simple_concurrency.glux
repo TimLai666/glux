@@ -5,7 +5,7 @@ fn get_number() -> int {
     return 42
 }
 
-fn main() {
+main {
     // 啟動任務
     println("開始併發任務")
     task := spawn get_number()
