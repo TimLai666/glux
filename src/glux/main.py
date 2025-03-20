@@ -81,10 +81,42 @@ class GluxCompiler:
                 if platform.system() == 'Windows':
                     output_path += '.exe'
             
-            # 生成LLVM IR
-            llvm_ir = self._generate_llvm_ir(source_code, file_path)
-            if not llvm_ir:
+            # 詞法分析
+            self.logger.info("開始詞法分析...")
+            lexer = Lexer(source_code, file_path)
+            tokens = lexer.tokenize()
+            
+            if lexer.errors:
+                self.logger.error("詞法分析錯誤:")
+                for error in lexer.errors:
+                    self.logger.error(f"  {error}")
                 return False
+            
+            # 語法分析
+            self.logger.info("開始語法分析...")
+            parser = Parser(tokens)
+            ast = parser.parse()
+            
+            if parser.errors:
+                self.logger.error("語法分析錯誤:")
+                for error in parser.errors:
+                    self.logger.error(f"  {error}")
+                return False
+            
+            # 語義分析
+            self.logger.info("開始語義分析...")
+            semantic_analyzer = SemanticAnalyzer()
+            if not semantic_analyzer.analyze(ast):
+                self.logger.error("語義分析錯誤:")
+                for error in semantic_analyzer.get_errors():
+                    self.logger.error(f"  {error}")
+                return False
+            
+            # 生成LLVM IR
+            self.logger.info("開始生成 LLVM IR 代碼...")
+            code_generator = LLVMCodeGenerator()
+            code_generator.set_symbol_table(semantic_analyzer.symbol_table)
+            llvm_ir = code_generator.generate(ast)
             
             # 保存LLVM IR到文件
             ll_file = f"{output_path}.ll"
@@ -94,10 +126,6 @@ class GluxCompiler:
             
             # 嘗試生成二進制文件
             try:
-                ast = self._parse_and_analyze(source_code, file_path)
-                if not ast:
-                    return False
-                    
                 binary_emitter = BinaryEmitter(ast, output_path)
                 binary_file = binary_emitter.emit()
                 
@@ -134,107 +162,6 @@ class GluxCompiler:
                 self.logger.exception("詳細錯誤信息:")
             return False
     
-    def _parse_and_analyze(self, source_code: str, file_path: str) -> Optional[Any]:
-        """
-        解析源代碼並進行語義分析
-        
-        Args:
-            source_code: 源代碼
-            file_path: 文件路徑 (用於錯誤報告)
-            
-        Returns:
-            解析後的AST，如果解析失敗則返回None
-        """
-        try:
-            # 詞法分析
-            start_time = time.time()
-            self.logger.info("開始詞法分析...")
-            lexer = Lexer(source_code, file_path)
-            tokens = lexer.tokenize()
-            
-            if lexer.errors:
-                self.logger.error("詞法分析錯誤:")
-                for error in lexer.errors:
-                    self.logger.error(f"  {error}")
-                return None
-            
-            lexer_time = time.time() - start_time
-            self.logger.info(f"詞法分析完成，耗時 {lexer_time:.2f} 秒")
-            
-            # 語法分析
-            start_time = time.time()
-            self.logger.info("開始語法分析...")
-            parser = Parser(tokens)
-            ast = parser.parse()
-            
-            if parser.errors:
-                self.logger.error("語法分析錯誤:")
-                for error in parser.errors:
-                    self.logger.error(f"  {error}")
-                return None
-            
-            parser_time = time.time() - start_time
-            self.logger.info(f"語法分析完成，耗時 {parser_time:.2f} 秒")
-            
-            # 語義分析
-            start_time = time.time()
-            self.logger.info("開始語義分析...")
-            semantic_analyzer = SemanticAnalyzer()
-            if not semantic_analyzer.analyze(ast):
-                self.logger.error("語義分析錯誤:")
-                for error in semantic_analyzer.get_errors():
-                    self.logger.error(f"  {error}")
-                return None
-            
-            semantic_time = time.time() - start_time
-            self.logger.info(f"語義分析完成，耗時 {semantic_time:.2f} 秒")
-            
-            return ast
-            
-        except Exception as e:
-            self.logger.error(f"解析過程發生錯誤: {str(e)}")
-            if self.verbose:
-                self.logger.exception("詳細錯誤信息:")
-            return None
-    
-    def _generate_llvm_ir(self, source_code: str, file_path: str) -> Optional[str]:
-        """
-        生成 LLVM IR 代碼
-        
-        Args:
-            source_code: 源代碼
-            file_path: 文件路徑 (用於錯誤報告)
-        
-        Returns:
-            LLVM IR 代碼，如果生成失敗則返回None
-        """
-        ast = self._parse_and_analyze(source_code, file_path)
-        if not ast:
-            return None
-        
-        try:
-            # 代碼生成
-            start_time = time.time()
-            self.logger.info("開始生成 LLVM IR 代碼...")
-            code_generator = LLVMCodeGenerator()
-            llvm_ir = code_generator.generate(ast)
-            
-            gen_time = time.time() - start_time
-            self.logger.info(f"代碼生成完成，耗時 {gen_time:.2f} 秒")
-            
-            # 調試輸出
-            self.logger.debug(f"生成的LLVM IR:\n{llvm_ir}")
-            with open("/tmp/debug_llvm_ir.ll", "w") as f:
-                f.write(llvm_ir)
-            self.logger.info(f"LLVM IR已保存至/tmp/debug_llvm_ir.ll")
-            
-            return llvm_ir
-        except Exception as e:
-            self.logger.error(f"代碼生成過程發生錯誤: {str(e)}")
-            if self.verbose:
-                self.logger.exception("詳細錯誤信息:")
-            return None
-    
     def run_file(self, file_path: str, args: List[str] = None) -> int:
         """
         編譯並執行源文件
@@ -251,108 +178,137 @@ class GluxCompiler:
             with open(file_path, 'r', encoding='utf-8') as f:
                 source_code = f.read()
             
-            return self.run_string(source_code, file_path, args)
-        except Exception as e:
-            self.logger.error(f"讀取文件失敗: {str(e)}")
-            return 1
-    
-    def run_string(self, source_code: str, file_name: str = "<string>", args: List[str] = None) -> int:
-        """
-        編譯並執行源代碼字符串
-        
-        Args:
-            source_code: 源代碼
-            file_name: 文件名 (用於錯誤報告)
-            args: 命令行參數
+            # 詞法分析
+            self.logger.info("開始詞法分析...")
+            lexer = Lexer(source_code, file_path)
+            tokens = lexer.tokenize()
             
-        Returns:
-            int: 程序退出碼
-        """
-        # 強制使用JIT模式
-        os.environ["GLUX_JIT_ONLY"] = "1"
-        args = args or []
-        
-        # 生成LLVM IR
-        llvm_ir = self._generate_llvm_ir(source_code, file_name)
-        if not llvm_ir:
-            return 1
-        
-        try:
-            # 執行程序
-            self.logger.info("開始使用JIT執行程序...")
-            from .utils.ir_executor import IRExecutor
+            if lexer.errors:
+                self.logger.error("詞法分析錯誤:")
+                for error in lexer.errors:
+                    self.logger.error(f"  {error}")
+                return 1
             
-            # 保存LLVM IR到臨時文件
+            # 語法分析
+            self.logger.info("開始語法分析...")
+            parser = Parser(tokens)
+            ast = parser.parse()
+            
+            if parser.errors:
+                self.logger.error("語法分析錯誤:")
+                for error in parser.errors:
+                    self.logger.error(f"  {error}")
+                return 1
+            
+            # 語義分析
+            self.logger.info("開始語義分析...")
+            semantic_analyzer = SemanticAnalyzer()
+            if not semantic_analyzer.analyze(ast):
+                self.logger.error("語義分析錯誤:")
+                for error in semantic_analyzer.get_errors():
+                    self.logger.error(f"  {error}")
+                return 1
+            
+            # 生成LLVM IR
+            self.logger.info("開始生成 LLVM IR 代碼...")
+            code_generator = LLVMCodeGenerator()
+            code_generator.set_symbol_table(semantic_analyzer.symbol_table)
+            llvm_ir = code_generator.generate(ast)
+            
+            # 創建臨時文件來存儲IR
             with tempfile.NamedTemporaryFile(suffix='.ll', delete=False) as temp_file:
-                ir_file = temp_file.name
                 temp_file.write(llvm_ir.encode('utf-8'))
-                
-            # 執行LLVM IR
-            executor = IRExecutor()
-            exit_code, stdout, stderr = executor.execute(ir_file, args, is_ir=True)
+                temp_file_path = temp_file.name
             
-            # 清理臨時文件
             try:
-                os.unlink(ir_file)
-            except:
-                pass
-            
-            # 輸出結果
-            if stdout:
-                print(stdout)
-            if stderr:
-                print(stderr, file=sys.stderr)
+                # 執行IR
+                executor = IRExecutor()
+                exit_code, stdout, stderr = executor.execute(temp_file_path, args)
                 
-            return exit_code
-            
+                # 輸出結果
+                if stdout:
+                    print(stdout, end='')
+                if stderr:
+                    print(stderr, file=sys.stderr, end='')
+                
+                return exit_code
+            finally:
+                # 清理臨時文件
+                try:
+                    os.unlink(temp_file_path)
+                except:
+                    pass
+                
         except Exception as e:
             self.logger.error(f"執行過程發生錯誤: {str(e)}")
             if self.verbose:
                 self.logger.exception("詳細錯誤信息:")
             return 1
-        
+    
     def _create_jit_wrapper(self, output_path: str, ll_file: str) -> Optional[str]:
         """
-        創建一個包裝腳本，使用JIT模式運行LLVM IR
+        創建JIT運行包裝腳本
         
         Args:
-            output_path: 輸出文件路徑
+            output_path: 輸出路徑
             ll_file: LLVM IR文件路徑
             
         Returns:
-            生成的包裝腳本路徑，如果失敗則返回None
+            str: 包裝腳本路徑，如果創建失敗則返回None
         """
         try:
-            # 獲取Python解釋器路徑
-            python_path = sys.executable
-            
-            # 獲取Glux編譯器的安裝路徑
-            glux_path = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
-            
             # 創建包裝腳本
-            if platform.system() == 'Windows':
-                # Windows批處理腳本
-                wrapper_path = f"{output_path}.bat"
-                script_content = f"""@echo off
-"{python_path}" -c "import sys; sys.path.insert(0, '{glux_path}'); from src.glux.utils.ir_executor import IRExecutor; executor = IRExecutor(); exit_code, stdout, stderr = executor.execute('{ll_file}', sys.argv[1:], is_ir=True); print(stdout, end=''); print(stderr, end='', file=sys.stderr); sys.exit(exit_code)" %*
-"""
-            else:
-                # Unix shell腳本
-                wrapper_path = output_path
-                script_content = f"""#!/bin/sh
-exec "{python_path}" -c "import sys; sys.path.insert(0, '{glux_path}'); from src.glux.utils.ir_executor import IRExecutor; executor = IRExecutor(); exit_code, stdout, stderr = executor.execute('{ll_file}', sys.argv[1:], is_ir=True); print(stdout, end=''); print(stderr, end='', file=sys.stderr); sys.exit(exit_code)" "$@"
-"""
+            wrapper_path = output_path + '.py'
             
-            # 寫入腳本
-            with open(wrapper_path, 'w') as f:
-                f.write(script_content)
+            # 生成包裝腳本內容
+            wrapper_content = f'''#!/usr/bin/env python3
+import sys
+from llvmlite import binding as llvm
+
+def main():
+    # 初始化LLVM
+    llvm.initialize()
+    llvm.initialize_native_target()
+    llvm.initialize_native_asmprinter()
+    
+    # 讀取IR文件
+    with open("{ll_file}", "r") as f:
+        ir = f.read()
+    
+    # 創建模塊
+    module = llvm.parse_assembly(ir)
+    module.verify()
+    
+    # 創建執行引擎
+    target = llvm.Target.from_default_triple()
+    target_machine = target.create_target_machine()
+    engine = llvm.create_mcjit_compiler(module, target_machine)
+    
+    # 獲取main函數地址
+    main_addr = engine.get_function_address("main")
+    
+    # 創建函數指針
+    from ctypes import CFUNCTYPE, c_int
+    main_function = CFUNCTYPE(c_int)(main_addr)
+    
+    # 執行
+    result = main_function()
+    return result
+
+if __name__ == "__main__":
+    sys.exit(main())
+'''
+            
+            # 寫入包裝腳本
+            with open(wrapper_path, 'w', encoding='utf-8') as f:
+                f.write(wrapper_content)
             
             # 設置可執行權限
             os.chmod(wrapper_path, 0o755)
             
             return wrapper_path
         except Exception as e:
-            self.logger.error(f"創建JIT包裝腳本時發生錯誤: {str(e)}")
+            self.logger.error(f"創建JIT包裝腳本失敗: {str(e)}")
             return None
 
 

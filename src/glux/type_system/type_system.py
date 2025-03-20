@@ -468,6 +468,24 @@ class TypeSystem:
         sleep_func.param_names = ["milliseconds"]
         sleep_func.return_type = TypeSystem.get_type("void")
         cls.register_type(sleep_func)
+        
+        # spawn - 啟動一個並發任務
+        spawn_func = GluxType("spawn", TypeKind.FUNCTION)
+        spawn_func.params = [TypeSystem.get_type("any")]  # 實際上是一個函數調用
+        spawn_func.param_names = ["function_call"]
+        # spawn 返回一個任務類型，包裝函數返回類型
+        # 由於無法提前知道返回類型，這裡使用 any
+        spawn_func.return_type = cls.create_task_type(TypeSystem.get_type("any"))
+        cls.register_type(spawn_func)
+        
+        # await - 等待一個或多個任務完成
+        await_func = GluxType("await", TypeKind.FUNCTION)
+        await_func.params = [TypeSystem.get_type("any")]  # 實際上是一個或多個任務
+        await_func.param_names = ["tasks"]
+        # await 返回任務的結果類型
+        # 由於無法提前知道返回類型，這裡使用 any
+        await_func.return_type = TypeSystem.get_type("any")
+        cls.register_type(await_func)
 
     @classmethod
     def infer_numeric_type(cls, value: Union[int, float]) -> str:
@@ -503,6 +521,29 @@ class TypeSystem:
         else:
             # 非數值型別
             return "unknown"
+
+    @classmethod
+    def create_task_type(cls, result_type: GluxType) -> GluxType:
+        """
+        創建任務類型
+        
+        Args:
+            result_type: 任務完成後的結果類型
+            
+        Returns:
+            任務類型
+        """
+        type_name = f"task<{result_type.name}>"
+        
+        # 檢查是否已存在
+        if type_name in cls._types:
+            return cls._types[type_name]
+        
+        task_type = GluxType(type_name, TypeKind.TASK)
+        task_type.subtypes.append(result_type)
+        task_type.element_type = result_type  # 設置任務結果類型
+        cls.register_type(task_type)
+        return task_type
 
 
 # 初始化內建類型

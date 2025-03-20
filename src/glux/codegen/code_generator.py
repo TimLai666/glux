@@ -262,82 +262,175 @@ class LLVMCodeGenerator(CodeGenerator):
 
     def _generate_conditional_expression(self, expr):
         """
-        生成三元運算符表達式的LLVM IR代碼
+        生成條件表達式(三元運算符) 的 LLVM IR 代碼
         
         Args:
-            expr: 三元運算符表達式
+            expr: 條件表達式
             
         Returns:
-            唯一標識符
+            LLVM IR 代碼
         """
-        # 生成唯一標識符
-        result_id = self._get_unique_id()
+        # 生成結果變量
+        result = ""
+        result_var = f"%cond_result_{self.var_counter}"
+        self.var_counter += 1
         
-        # 取得條件值
-        condition_id = self.generate(expr.condition)
-        condition_data = self.result_data.get(condition_id, {})
-        condition_value = condition_data.get('value')
-        if not condition_value:
-            self.logger.warning(f"未找到條件表達式的值: {expr.condition}")
-            return result_id
+        # 生成條件標籤
+        then_label = f"cond_then_{self.label_counter}"
+        else_label = f"cond_else_{self.label_counter}"
+        end_label = f"cond_end_{self.label_counter}"
+        self.label_counter += 1
         
-        # 創建一些基本塊
-        func = self.builder.basic_block.function
-        then_block = func.append_basic_block(f"ternary.then.{result_id}")
-        else_block = func.append_basic_block(f"ternary.else.{result_id}")
-        merge_block = func.append_basic_block(f"ternary.merge.{result_id}")
+        # 分配結果變量的內存空間
+        # 假設結果類型為 i32，實際情況應該根據表達式類型確定
+        result_type = "i32"
+        if hasattr(expr.then_expr, 'type') and expr.then_expr.type:
+            if expr.then_expr.type == "float" or expr.then_expr.type == "f32":
+                result_type = "float"
+            elif expr.then_expr.type == "double" or expr.then_expr.type == "f64":
+                result_type = "double"
+            elif expr.then_expr.type == "string":
+                result_type = "i8*"
+            # 根據需要添加更多類型處理
         
-        # 條件跳轉
-        self.builder.cbranch(condition_value, then_block, else_block)
+        result += f"    {result_var} = alloca {result_type}\n"
         
-        # 生成then分支
-        self.builder.position_at_end(then_block)
-        then_value_id = self.generate(expr.then_expr)
-        then_data = self.result_data.get(then_value_id, {})
-        then_value = then_data.get('value')
-        if not then_value:
-            self.logger.warning(f"未找到then表達式的值: {expr.then_expr}")
-            then_value = self.context.i32_type().const_int(0)
-        then_type = then_data.get('type')
-        then_builder = self.builder
-        self.builder.branch(merge_block)
+        # 生成條件表達式的代碼
+        if isinstance(expr.condition, ast_nodes.BinaryExpr):
+            # 處理二元比較表達式
+            cmp_result = self._generate_comparison(expr.condition, f"cond_cmp_{self.var_counter}")
+            self.var_counter += 1
+            result += cmp_result
+        elif isinstance(expr.condition, ast_nodes.Variable):
+            # 處理變量
+            var_name = expr.condition.name
+            var_type = self._get_variable_type(var_name)
+            
+            # 加載變量值
+            load_result = self._generate_load_variable(var_name, var_type, "cond")
+            result += load_result["code"]
+            cmp_result = load_result["result_var"]
+        else:
+            # 其他類型的條件表達式
+            # 對於簡單起見，假設默認為 true
+            result += f"    %cond_value = add i1 1, 0\n"
+            cmp_result = "%cond_value"
         
-        # 生成else分支
-        self.builder.position_at_end(else_block)
-        else_value_id = self.generate(expr.else_expr)
-        else_data = self.result_data.get(else_value_id, {})
-        else_value = else_data.get('value')
-        if not else_value:
-            self.logger.warning(f"未找到else表達式的值: {expr.else_expr}")
-            else_value = self.context.i32_type().const_int(0)
-        else_type = else_data.get('type')
-        else_builder = self.builder
-        self.builder.branch(merge_block)
+        # 條件分支跳轉
+        result += f"    br i1 {cmp_result}, label %{then_label}, label %{else_label}\n"
         
-        # 獲取適當的類型
-        result_type = then_type if then_type else else_type
-        if then_type and else_type and then_type != else_type:
-            # 簡單處理：使用其中一個類型，實際上可能需要類型轉換
-            self.logger.warning("三元運算符兩分支的值類型不同")
+        # 生成 then 分支
+        result += f"{then_label}:\n"
         
-        # 合併結果
-        self.builder.position_at_end(merge_block)
-        phi = self.builder.phi(result_type, f"ternary.result.{result_id}")
-        phi.add_incoming(then_value, then_builder.block)
-        phi.add_incoming(else_value, else_builder.block)
+        # 生成 then 表達式的代碼
+        then_value_var = ""
+        if isinstance(expr.then_expr, ast_nodes.Literal):
+            if isinstance(expr.then_expr, ast_nodes.Number):
+                # 整數字面量
+                then_value = expr.then_expr.value
+                result += f"    %then_value_{self.var_counter} = add {result_type} {then_value}, 0\n"
+                then_value_var = f"%then_value_{self.var_counter}"
+                self.var_counter += 1
+            elif isinstance(expr.then_expr, ast_nodes.StringLiteral):
+                # 字符串字面量
+                string_var = self._add_global_string(expr.then_expr.value + "\\00")
+                result += f"    %then_value_{self.var_counter} = getelementptr [{self._get_byte_length(expr.then_expr.value + '\\00')} x i8], [{self._get_byte_length(expr.then_expr.value + '\\00')} x i8]* {string_var}, i32 0, i32 0\n"
+                then_value_var = f"%then_value_{self.var_counter}"
+                self.var_counter += 1
+            elif isinstance(expr.then_expr, ast_nodes.Float):
+                # 浮點字面量
+                then_value = expr.then_expr.value
+                result += f"    %then_value_{self.var_counter} = fadd {result_type} {then_value}, 0.0\n"
+                then_value_var = f"%then_value_{self.var_counter}"
+                self.var_counter += 1
+            elif isinstance(expr.then_expr, ast_nodes.Boolean):
+                # 布爾字面量
+                then_value = "1" if expr.then_expr.value else "0"
+                result += f"    %then_value_{self.var_counter} = add i1 {then_value}, 0\n"
+                then_value_var = f"%then_value_{self.var_counter}"
+                self.var_counter += 1
+        elif isinstance(expr.then_expr, ast_nodes.Variable):
+            # 變量
+            var_name = expr.then_expr.name
+            var_type = self._get_variable_type(var_name)
+            
+            # 加載變量值
+            load_result = self._generate_load_variable(var_name, var_type, "then")
+            result += load_result["code"]
+            then_value_var = load_result["result_var"]
+        else:
+            # 對於更複雜的表達式，需要遞歸生成代碼
+            # 為簡單起見，這裡使用一個默認值
+            result += f"    %then_value_{self.var_counter} = add {result_type} 0, 0\n"
+            then_value_var = f"%then_value_{self.var_counter}"
+            self.var_counter += 1
         
-        # 分配內存並存儲結果
-        result_ptr = self.builder.alloca(result_type, name=f"ternary.ptr.{result_id}")
-        self.builder.store(phi, result_ptr)
+        # 在 then 分支中存儲結果
+        result += f"    store {result_type} {then_value_var}, {result_type}* {result_var}\n"
+        result += f"    br label %{end_label}\n"
         
-        # 保存結果信息
-        self.result_data[result_id] = {
-            'value': phi,
-            'ptr': result_ptr,
-            'type': result_type
-        }
+        # 生成 else 分支
+        result += f"{else_label}:\n"
         
-        return result_id
+        # 生成 else 表達式的代碼
+        else_value_var = ""
+        if isinstance(expr.else_expr, ast_nodes.Literal):
+            if isinstance(expr.else_expr, ast_nodes.Number):
+                # 整數字面量
+                else_value = expr.else_expr.value
+                result += f"    %else_value_{self.var_counter} = add {result_type} {else_value}, 0\n"
+                else_value_var = f"%else_value_{self.var_counter}"
+                self.var_counter += 1
+            elif isinstance(expr.else_expr, ast_nodes.StringLiteral):
+                # 字符串字面量
+                string_var = self._add_global_string(expr.else_expr.value + "\\00")
+                result += f"    %else_value_{self.var_counter} = getelementptr [{self._get_byte_length(expr.else_expr.value + '\\00')} x i8], [{self._get_byte_length(expr.else_expr.value + '\\00')} x i8]* {string_var}, i32 0, i32 0\n"
+                else_value_var = f"%else_value_{self.var_counter}"
+                self.var_counter += 1
+            elif isinstance(expr.else_expr, ast_nodes.Float):
+                # 浮點字面量
+                else_value = expr.else_expr.value
+                result += f"    %else_value_{self.var_counter} = fadd {result_type} {else_value}, 0.0\n"
+                else_value_var = f"%else_value_{self.var_counter}"
+                self.var_counter += 1
+            elif isinstance(expr.else_expr, ast_nodes.Boolean):
+                # 布爾字面量
+                else_value = "1" if expr.else_expr.value else "0"
+                result += f"    %else_value_{self.var_counter} = add i1 {else_value}, 0\n"
+                else_value_var = f"%else_value_{self.var_counter}"
+                self.var_counter += 1
+        elif isinstance(expr.else_expr, ast_nodes.Variable):
+            # 變量
+            var_name = expr.else_expr.name
+            var_type = self._get_variable_type(var_name)
+            
+            # 加載變量值
+            load_result = self._generate_load_variable(var_name, var_type, "else")
+            result += load_result["code"]
+            else_value_var = load_result["result_var"]
+        else:
+            # 對於更複雜的表達式，需要遞歸生成代碼
+            # 為簡單起見，這裡使用一個默認值
+            result += f"    %else_value_{self.var_counter} = add {result_type} 0, 0\n"
+            else_value_var = f"%else_value_{self.var_counter}"
+            self.var_counter += 1
+        
+        # 在 else 分支中存儲結果
+        result += f"    store {result_type} {else_value_var}, {result_type}* {result_var}\n"
+        result += f"    br label %{end_label}\n"
+        
+        # 生成合併區塊
+        result += f"{end_label}:\n"
+        
+        # 加載最終結果
+        final_result_var = f"%cond_final_{self.var_counter}"
+        self.var_counter += 1
+        result += f"    {final_result_var} = load {result_type}, {result_type}* {result_var}\n"
+        
+        # 記錄變量和類型信息
+        self.variables[final_result_var] = result_type
+        
+        return result
     
     def _collect_string_from_expr(self, expr):
         """從表達式中收集字符串"""
@@ -444,159 +537,226 @@ class LLVMCodeGenerator(CodeGenerator):
         return result
     
     def _generate_spawn(self, expr):
-        """生成 spawn 表達式的 LLVM IR 代碼"""
-        result = "    ; spawn 表達式 - 創建並啟動一個新任務\n"
+        """
+        生成 spawn 表達式的 LLVM IR 代碼
         
-        if isinstance(expr, ast_nodes.SpawnExpression):
-            function_call = expr.function_call
-            if isinstance(function_call, ast_nodes.CallExpression):
-                # 獲取函數名稱和參數
-                if isinstance(function_call.callee, ast_nodes.Variable):
-                    function_name = function_call.callee.name
+        Args:
+            expr: spawn 表達式
+            
+        Returns:
+            生成的 LLVM IR 代碼
+        """
+        result = ""
+        
+        # 生成任務結構體類型（如果尚未生成）
+        if not hasattr(self, 'task_type_generated'):
+            result += self._generate_task_type()
+            self.task_type_generated = True
+        
+        # 生成任務 ID
+        task_id = f"task_{self.thread_counter}"
+        self.thread_counter += 1
+        
+        # 生成任務結構體
+        result += f"    ; Allocate task struct for {task_id}\n"
+        result += f"    %{task_id}_struct = alloca %task_struct\n"
+        
+        # 初始化任務狀態
+        result += f"    ; Initialize task state\n"
+        result += f"    %{task_id}_done_ptr = getelementptr %task_struct, %task_struct* %{task_id}_struct, i32 0, i32 1\n"
+        result += f"    store i1 0, i1* %{task_id}_done_ptr\n"
+        
+        # 生成函數指針
+        if isinstance(expr.function_call, ast_nodes.CallExpression):
+            # 獲取函數名稱
+            if isinstance(expr.function_call.callee, ast_nodes.Variable):
+                func_name = expr.function_call.callee.name
+                
+                # 生成參數處理代碼
+                args_code = ""
+                args_vars = []
+                for i, arg in enumerate(expr.function_call.arguments):
+                    arg_var = f"%{task_id}_arg_{i}"
+                    args_vars.append(arg_var)
                     
-                    # 創建一個唯一的標識符來表示這個異步任務
-                    task_id = self.var_counter
-                    self.var_counter += 1
-                    
-                    # 分配任務結構體內存
-                    result += f"    %task_{task_id} = alloca %task_struct\n"
-                    
-                    # 設置任務函數指針
-                    result += f"    %task_func_ptr_{task_id} = getelementptr %task_struct, %task_struct* %task_{task_id}, i32 0, i32 0\n"
-                    result += f"    store i8* @{function_name}, i8** %task_func_ptr_{task_id}\n"
-                    
-                    # 設置任務狀態（初始為未完成）
-                    result += f"    %task_complete_ptr_{task_id} = getelementptr %task_struct, %task_struct* %task_{task_id}, i32 0, i32 1\n"
-                    result += f"    store i1 false, i1* %task_complete_ptr_{task_id}\n"
-                    
-                    # 處理參數
-                    args_str = ""
-                    for i, arg in enumerate(function_call.arguments):
+                    if isinstance(arg, ast_nodes.Literal):
                         if isinstance(arg, ast_nodes.Number):
-                            args_str += f", i32 {arg.value}"
+                            args_code += f"    {arg_var} = add i32 {arg.value}, 0\n"
+                        elif isinstance(arg, ast_nodes.StringLiteral):
+                            str_var = self._add_global_string(arg.value + "\\00")
+                            args_code += f"    {arg_var} = getelementptr [{self._get_byte_length(arg.value + '\\00')} x i8], [{self._get_byte_length(arg.value + '\\00')} x i8]* {str_var}, i32 0, i32 0\n"
                         elif isinstance(arg, ast_nodes.Variable):
-                            result += f"    %spawn_arg_{task_id}_{i} = load i32, i32* %{arg.name}\n"
-                            args_str += f", i32 %spawn_arg_{task_id}_{i}"
-                    
-                    # 調用函數
-                    result += f"    %spawn_result_{task_id} = call i32 @{function_name}({args_str[2:] if args_str else ''})\n"
-                    
-                    # 存儲結果
-                    result += f"    %task_result_ptr_{task_id} = getelementptr %task_struct, %task_struct* %task_{task_id}, i32 0, i32 2\n"
-                    result += f"    store i32 %spawn_result_{task_id}, i32* %task_result_ptr_{task_id}\n"
-                    
-                    # 設置任務為已完成
-                    result += f"    store i1 true, i1* %task_complete_ptr_{task_id}\n"
-                    
-                    # 將任務指針存儲在一個變數中
-                    # 這個變數將被後續的 await 表達式使用
-                    result += f"    ; 保存任務指針，以便後續 await 使用\n"
-                    # 創建任務指針變數
-                    result += f"    %task_var_{task_id} = alloca i8*\n"
-                    # 將任務結構體指針轉換為 i8*
-                    result += f"    %task_ptr_{task_id} = bitcast %task_struct* %task_{task_id} to i8*\n"
-                    # 存儲任務指針
-                    result += f"    store i8* %task_ptr_{task_id}, i8** %task_var_{task_id}\n"
-                    
-                    # 返回任務指針變數
-                    # 不要依賴 expr 變數，直接使用任務 ID
-                    self.result_data[expr] = (f"task_var_{task_id}", "i8*")
-                    
-                    return result
+                            var_type = self._get_variable_type(arg.name)
+                            load_result = self._generate_load_variable(arg.name, var_type, f"{task_id}_arg_{i}")
+                            args_code += load_result["code"]
+                            args_vars[-1] = load_result["result_var"]
+                
+                result += args_code
+                
+                # 生成任務函數包裝器
+                wrapper_name = f"@task_wrapper_{task_id}"
+                result += self._generate_task_wrapper(wrapper_name, func_name, args_vars)
+                
+                # 存儲函數指針
+                result += f"    ; Store function pointer\n"
+                result += f"    %{task_id}_func_ptr = getelementptr %task_struct, %task_struct* %{task_id}_struct, i32 0, i32 0\n"
+                result += f"    store i8* bitcast (void ()* {wrapper_name} to i8*), i8** %{task_id}_func_ptr\n"
+            else:
+                return self._handle_error("Spawn requires a function name", expr)
+        else:
+            return self._handle_error("Invalid spawn expression", expr)
         
-        # 處理錯誤情況
-        return result + "    ; 無法解析 spawn 表達式，生成空代碼\n"
+        # 啟動任務
+        result += f"    ; Spawn task\n"
+        result += f"    call i32 @spawn_task(%task_struct* %{task_id}_struct)\n"
+        
+        # 保存任務信息
+        self.result_data[task_id] = {
+            'struct_ptr': f"%{task_id}_struct",
+            'type': 'task'
+        }
+        
+        return result
 
     def _generate_await(self, expr):
-        """生成 await 表達式的 LLVM IR 代碼"""
-        result = "    ; await 表達式 - 等待一個或多個異步任務完成\n"
+        """
+        生成 await 表達式的 LLVM IR 代碼
         
-        if isinstance(expr, ast_nodes.AwaitExpression):
-            expressions = expr.expressions
+        Args:
+            expr: await 表達式
             
-            # 單一 await 處理
-            if len(expressions) == 1:
-                task_expr = expressions[0]
-                if isinstance(task_expr, ast_nodes.CallExpression) and isinstance(task_expr.callee, ast_nodes.Variable):
-                    task_var = task_expr.callee.name
+        Returns:
+            生成的 LLVM IR 代碼
+        """
+        result = ""
+        
+        # 檢查是否有任務要等待
+        if not expr.expressions:
+            return self._handle_error("No tasks to await", expr)
+        
+        # 如果只有一個任務
+        if len(expr.expressions) == 1:
+            task = expr.expressions[0]
+            if isinstance(task, ast_nodes.Variable):
+                task_id = task.name
+                if task_id in self.result_data and self.result_data[task_id]['type'] == 'task':
+                    struct_ptr = self.result_data[task_id]['struct_ptr']
                     
-                    # 獲取任務變數名稱
-                    # 這是從 spawn 表達式中獲取的任務指針變數
-                    task_var_name = ""
-                    for key, value in self.result_data.items():
-                        if isinstance(key, ast_nodes.SpawnExpression) and isinstance(key.function_call, ast_nodes.CallExpression):
-                            if isinstance(key.function_call.callee, ast_nodes.Variable) and key.function_call.callee.name == task_var:
-                                task_var_name = value[0]
-                                break
-                    
-                    # 如果找不到任務變數，使用一個默認的處理方式
-                    if not task_var_name:
-                        result += f"    ; 警告：無法找到任務 {task_var} 的指針變數\n"
-                        result += f"    %await_result_{self.var_counter} = call i32 @{task_var}()\n"
-                        self.var_counter += 1
-                        return result
-                    
-                    # 獲取任務指針
-                    result += f"    %await_task_ptr_{self.var_counter} = load i8*, i8** %{task_var_name}\n"
+                    # 等待任務完成
+                    result += f"    ; Wait for task {task_id}\n"
+                    result += f"    call void @await_task(%task_struct* {struct_ptr})\n"
                     
                     # 獲取任務結果
-                    result += f"    %await_task_{self.var_counter} = bitcast i8* %await_task_ptr_{self.var_counter} to %task_struct*\n"
-                    result += f"    %await_result_ptr_{self.var_counter} = getelementptr %task_struct, %task_struct* %await_task_{self.var_counter}, i32 0, i32 2\n"
-                    result += f"    %await_result_{self.var_counter} = load i32, i32* %await_result_ptr_{self.var_counter}\n"
+                    result += f"    ; Get task result\n"
+                    result += f"    %{task_id}_result_ptr = getelementptr %task_struct, %task_struct* {struct_ptr}, i32 0, i32 2\n"
+                    result += f"    %{task_id}_result = load i32, i32* %{task_id}_result_ptr\n"
                     
-                    # 保存結果，以便後續使用
-                    self.result_data[expr] = (f"await_result_{self.var_counter}", "i32")
+                    # 清理任務資源
+                    result += f"    ; Cleanup task resources\n"
+                    result += f"    call void @cleanup_task(%task_struct* {struct_ptr})\n"
                     
-                    self.var_counter += 1
                     return result
+                else:
+                    return self._handle_error(f"Invalid task variable: {task_id}", expr)
+            else:
+                return self._handle_error("Await requires a task variable", expr)
+        else:
+            # 多個任務的情況
+            result += f"    ; Wait for multiple tasks\n"
             
-            # 多 await 處理 (等待多個任務，返回結果元組)
-            elif len(expressions) > 1:
-                result += f"    ; 等待多個任務完成並返回結果元組\n"
+            # 創建結果元組
+            tuple_type = f"%tuple{len(expr.expressions)}_struct"
+            result_var = f"%await_result_{self.var_counter}"
+            self.var_counter += 1
                 
-                await_tuple_id = self.var_counter
-                self.var_counter += 1
-                
-                # 分配結果元組空間
-                result += f"    %await_tuple_{await_tuple_id} = alloca %tuple{len(expressions)}_struct\n"
-                
-                # 處理每個任務
-                for i, task_expr in enumerate(expressions):
-                    if isinstance(task_expr, ast_nodes.CallExpression) and isinstance(task_expr.callee, ast_nodes.Variable):
-                        task_var = task_expr.callee.name
+            result += f"    {result_var} = alloca {tuple_type}\n"
+            
+            # 等待每個任務並收集結果
+            for i, task in enumerate(expr.expressions):
+                if isinstance(task, ast_nodes.Variable):
+                    task_id = task.name
+                    if task_id in self.result_data and self.result_data[task_id]['type'] == 'task':
+                        struct_ptr = self.result_data[task_id]['struct_ptr']
                         
-                        # 獲取任務變數名稱
-                        task_var_name = ""
-                        for key, value in self.result_data.items():
-                            if isinstance(key, ast_nodes.SpawnExpression) and isinstance(key.function_call, ast_nodes.CallExpression):
-                                if isinstance(key.function_call.callee, ast_nodes.Variable) and key.function_call.callee.name == task_var:
-                                    task_var_name = value[0]
-                                    break
+                        # 等待任務
+                        result += f"    ; Wait for task {task_id}\n"
+                        result += f"    call void @await_task(%task_struct* {struct_ptr})\n"
                         
-                        # 如果找不到任務變數，使用一個默認的處理方式
-                        if not task_var_name:
-                            result += f"    ; 警告：無法找到任務 {task_var} 的指針變數\n"
-                            result += f"    %await_result_{await_tuple_id}_{i} = call i32 @{task_var}()\n"
-                        else:
-                            # 獲取任務指針
-                            result += f"    %await_task_ptr_{await_tuple_id}_{i} = load i8*, i8** %{task_var_name}\n"
-                            
-                            # 獲取任務結果
-                            result += f"    %await_task_{await_tuple_id}_{i} = bitcast i8* %await_task_ptr_{await_tuple_id}_{i} to %task_struct*\n"
-                            result += f"    %await_result_ptr_{await_tuple_id}_{i} = getelementptr %task_struct, %task_struct* %await_task_{await_tuple_id}_{i}, i32 0, i32 2\n"
-                            result += f"    %await_result_{await_tuple_id}_{i} = load i32, i32* %await_result_ptr_{await_tuple_id}_{i}\n"
+                        # 獲取結果
+                        result += f"    ; Get task {task_id} result\n"
+                        result += f"    %{task_id}_result_ptr = getelementptr %task_struct, %task_struct* {struct_ptr}, i32 0, i32 2\n"
+                        result += f"    %{task_id}_result = load i32, i32* %{task_id}_result_ptr\n"
                         
-                        # 存儲到元組中
-                        result += f"    %tuple_elem_ptr_{await_tuple_id}_{i} = getelementptr %tuple{len(expressions)}_struct, %tuple{len(expressions)}_struct* %await_tuple_{await_tuple_id}, i32 0, i32 {i}\n"
-                        result += f"    store i32 %await_result_{await_tuple_id}_{i}, i32* %tuple_elem_ptr_{await_tuple_id}_{i}\n"
-                
-                # 保存元組結果，以便後續使用
-                self.result_data[expr] = (f"await_tuple_{await_tuple_id}", f"tuple{len(expressions)}_struct*")
-                
-                return result
+                        # 存儲到元組
+                        result += f"    ; Store result in tuple\n"
+                        result += f"    %{task_id}_tuple_ptr = getelementptr {tuple_type}, {tuple_type}* {result_var}, i32 0, i32 {i}\n"
+                        result += f"    store i32 %{task_id}_result, i32* %{task_id}_tuple_ptr\n"
+                        
+                        # 清理任務
+                        result += f"    ; Cleanup task resources\n"
+                        result += f"    call void @cleanup_task(%task_struct* {struct_ptr})\n"
+                    else:
+                        return self._handle_error(f"Invalid task variable: {task_id}", expr)
+                else:
+                    return self._handle_error("Await requires task variables", expr)
+            
+            return result
+            
+    def _generate_task_type(self):
+        """
+        生成任務相關的類型和函數定義
         
-        # 處理錯誤情況
-        return result + "    ; 無法解析 await 表達式，生成空代碼\n"
+        Returns:
+            生成的 LLVM IR 代碼
+        """
+        result = """
+; Task management types and functions
+%task_struct = type {
+    i8*,  ; Function pointer
+    i1,   ; Done flag
+    i32   ; Result value
+}
+
+; Global task management variables
+@current_task = global %task_struct* null
+
+; Task management function declarations
+declare i32 @spawn_task(%task_struct*)
+declare void @await_task(%task_struct*)
+declare void @cleanup_task(%task_struct*)
+"""
+        return result
+        
+    def _generate_task_wrapper(self, wrapper_name: str, func_name: str, args_vars: list):
+        """
+        生成任務函數包裝器
+        
+        Args:
+            wrapper_name: 包裝器函數名稱
+            func_name: 原始函數名稱
+            args_vars: 參數變量列表
+            
+        Returns:
+            生成的 LLVM IR 代碼
+        """
+        result = f"""
+define void {wrapper_name}() {{
+    ; Call original function with arguments
+    %result = call i32 @{func_name}({', '.join(f'i32 {arg}' for arg in args_vars)})
+    
+    ; Store result in task struct
+    %task = load %task_struct*, %task_struct** @current_task
+    %result_ptr = getelementptr %task_struct, %task_struct* %task, i32 0, i32 2
+    store i32 %result, i32* %result_ptr
+    
+    ; Set done flag
+    %done_ptr = getelementptr %task_struct, %task_struct* %task, i32 0, i32 1
+    store i1 1, i1* %done_ptr
+    
+    ret void
+}}
+"""
+        return result
     
     def _generate_var_declaration(self, stmt):
         """生成變量聲明的 LLVM IR 代碼"""
@@ -1687,6 +1847,85 @@ class LLVMCodeGenerator(CodeGenerator):
             result += f"    %is_error_result_{self.var_counter} = zext i1 %is_error_{self.var_counter} to i32\n"
             
             self.var_counter += 1
+        
+        return result
+
+    def _handle_error(self, message: str, expr=None, is_warning=False) -> str:
+        """
+        處理代碼生成過程中的錯誤
+        
+        Args:
+            message: 錯誤訊息
+            expr: 相關的表達式節點（可選）
+            is_warning: 是否為警告而非錯誤
+            
+        Returns:
+            生成的錯誤處理代碼
+        """
+        # 生成錯誤訊息
+        error_msg = message
+        if expr:
+            error_msg += f" at {expr.__class__.__name__}"
+        
+        # 記錄錯誤或警告
+        if is_warning:
+            self.logger.warning(error_msg)
+        else:
+            self.logger.error(error_msg)
+        
+        # 生成錯誤處理代碼
+        result = ""
+        
+        # 生成錯誤字符串常量
+        error_str = self._add_global_string(error_msg + "\\00")
+        
+        # 生成錯誤處理代碼
+        if not is_warning:
+            # 對於錯誤，生成調用 error 函數的代碼
+            result += f"    ; Error: {error_msg}\n"
+            result += f"    %error_msg_{self.var_counter} = getelementptr [{self._get_byte_length(error_msg + '\\00')} x i8], [{self._get_byte_length(error_msg + '\\00')} x i8]* {error_str}, i32 0, i32 0\n"
+            result += f"    call void @error(i8* %error_msg_{self.var_counter})\n"
+            self.var_counter += 1
+            
+            # 生成一個默認值作為錯誤恢復
+            result += f"    %error_value_{self.var_counter} = add i32 0, 0 ; Default error value\n"
+            self.var_counter += 1
+        else:
+            # 對於警告，只生成警告訊息的註釋
+            result += f"    ; Warning: {error_msg}\n"
+        
+        return result
+        
+    def _generate_error_functions(self) -> str:
+        """
+        生成錯誤處理相關的函數定義
+        
+        Returns:
+            錯誤處理函數的LLVM IR代碼
+        """
+        result = "; Error handling functions\n"
+        
+        # 定義 error 函數
+        result += "declare void @error(i8*)\n"
+        
+        # 定義 is_error 函數
+        result += "declare i1 @is_error(i8*)\n"
+        
+        # 定義錯誤結構體類型
+        result += "%error_t = type { i32, i8* }\n"
+        
+        # 定義創建錯誤的函數
+        result += """
+define %error_t @create_error(i32 %code, i8* %message) {
+    %error = alloca %error_t
+    %code_ptr = getelementptr %error_t, %error_t* %error, i32 0, i32 0
+    store i32 %code, i32* %code_ptr
+    %msg_ptr = getelementptr %error_t, %error_t* %error, i32 0, i32 1
+    store i8* %message, i8** %msg_ptr
+    %result = load %error_t, %error_t* %error
+    ret %error_t %result
+}
+"""
         
         return result
 

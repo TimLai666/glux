@@ -545,6 +545,10 @@ class TypeChecker:
             result_type = self._check_expression(expr.expression)
         elif isinstance(expr, ast_nodes.ConditionalExpression):
             result_type = self._check_conditional_expr(expr)
+        elif isinstance(expr, ast_nodes.SpawnExpression):
+            result_type = self._check_spawn_expr(expr)
+        elif isinstance(expr, ast_nodes.AwaitExpression):
+            result_type = self._check_await_expr(expr)
         elif isinstance(expr, ast_nodes.Number):
             # 直接處理 Number 節點
             result_type = self._check_number_literal(expr)
@@ -1046,4 +1050,287 @@ class TypeChecker:
             return None
         
         # 返回共同類型
-        return TypeSystem.get_type(common_type_name) 
+        return TypeSystem.get_type(common_type_name)
+
+    def _infer_type(self, expr) -> Optional[GluxType]:
+        """
+        從表達式推導類型
+        
+        Args:
+            expr: 表達式節點
+            
+        Returns:
+            推導出的類型，如果無法推導則返回None
+        """
+        if isinstance(expr, ast_nodes.Literal):
+            if isinstance(expr, ast_nodes.Number):
+                # 根據數值大小自動選擇整數類型
+                value = int(expr.value)
+                if -128 <= value <= 127:
+                    return TypeSystem.get_type("i8")
+                elif -32768 <= value <= 32767:
+                    return TypeSystem.get_type("i16")
+                elif -2147483648 <= value <= 2147483647:
+                    return TypeSystem.get_type("i32")
+                else:
+                    return TypeSystem.get_type("i64")
+            elif isinstance(expr, ast_nodes.Float):
+                # 根據精度需求選擇浮點類型
+                value = float(expr.value)
+                # 如果小數點後超過7位，使用 f64
+                if abs(value - round(value, 7)) > 0:
+                    return TypeSystem.get_type("f64")
+                return TypeSystem.get_type("f32")
+            elif isinstance(expr, ast_nodes.StringLiteral):
+                return TypeSystem.get_type("string")
+            elif isinstance(expr, ast_nodes.Boolean):
+                return TypeSystem.get_type("bool")
+            elif isinstance(expr, ast_nodes.ListLiteral):
+                # 推導列表元素類型
+                if not expr.elements:
+                    # 空列表，使用 any 類型
+                    element_type = TypeSystem.get_type("any")
+                else:
+                    # 嘗試找到所有元素的共同類型
+                    element_types = [self._infer_type(elem) for elem in expr.elements]
+                    element_type = self._find_common_type(element_types)
+                
+                # 創建列表類型
+                return TypeSystem.create_array_type(element_type)
+            elif isinstance(expr, ast_nodes.MapLiteral):
+                # 推導映射的鍵和值類型
+                if not expr.pairs:
+                    # 空映射，使用 any 類型
+                    key_type = TypeSystem.get_type("any")
+                    value_type = TypeSystem.get_type("any")
+                else:
+                    # 分別推導鍵和值的類型
+                    key_types = [self._infer_type(k) for k, _ in expr.pairs]
+                    value_types = [self._infer_type(v) for _, v in expr.pairs]
+                    key_type = self._find_common_type(key_types)
+                    value_type = self._find_common_type(value_types)
+                
+                # 創建映射類型
+                return TypeSystem.create_map_type(key_type, value_type)
+            elif isinstance(expr, ast_nodes.Tuple):
+                # 推導元組中每個元素的類型
+                element_types = [self._infer_type(elem) for elem in expr.elements]
+                return TypeSystem.create_tuple_type(element_types)
+        
+        elif isinstance(expr, ast_nodes.Variable):
+            # 查找變數的類型
+            symbol = self.symbol_table.resolve(expr.name)
+            if symbol:
+                return symbol.type_info
+        
+        elif isinstance(expr, ast_nodes.BinaryExpr):
+            # 推導二元運算表達式的類型
+            left_type = self._infer_type(expr.left)
+            right_type = self._infer_type(expr.right)
+            
+            if not left_type or not right_type:
+                return None
+            
+            # 根據運算符類型推導結果類型
+            if expr.operator in ['==', '!=', '<', '<=', '>', '>=']:
+                return TypeSystem.get_type("bool")
+            elif expr.operator in ['+', '-', '*', '/', '%']:
+                # 如果其中一個是字符串，且運算符是 +，結果是字符串
+                if expr.operator == '+' and (left_type.name == 'string' or right_type.name == 'string'):
+                    return TypeSystem.get_type("string")
+                
+                # 數值運算
+                if TypeSystem.is_numeric_type(left_type.name) and TypeSystem.is_numeric_type(right_type.name):
+                    return self._find_common_numeric_type(left_type, right_type)
+            elif expr.operator in ['&', '|', '^', '<<', '>>']:
+                # 位運算只能用於整數類型
+                if TypeSystem.is_integer_type(left_type.name) and TypeSystem.is_integer_type(right_type.name):
+                    return self._find_common_numeric_type(left_type, right_type)
+        
+        elif isinstance(expr, ast_nodes.UnaryExpr):
+            # 推導一元運算表達式的類型
+            operand_type = self._infer_type(expr.operand)
+            if not operand_type:
+                return None
+            
+            if expr.operator in ['+', '-']:
+                return operand_type
+            elif expr.operator == '!':
+                return TypeSystem.get_type("bool")
+            elif expr.operator == '~':
+                if TypeSystem.is_integer_type(operand_type.name):
+                    return operand_type
+        
+        elif isinstance(expr, ast_nodes.CallExpr):
+            # 推導函數調用的返回類型
+            if isinstance(expr.callee, ast_nodes.Variable):
+                func_name = expr.callee.name
+                func_symbol = self.symbol_table.resolve(func_name)
+                if func_symbol and func_symbol.type_info:
+                    return func_symbol.type_info.return_type
+        
+        elif isinstance(expr, ast_nodes.ConditionalExpression):
+            # 推導條件表達式的類型
+            then_type = self._infer_type(expr.then_expr)
+            else_type = self._infer_type(expr.else_expr)
+            
+            if then_type and else_type:
+                # 找到兩個分支的共同類型
+                return self._find_common_type([then_type, else_type])
+        
+        elif isinstance(expr, ast_nodes.MemberAccess):
+            # 推導成員訪問的類型
+            obj_type = self._infer_type(expr.object)
+            if obj_type:
+                if obj_type.kind == TypeKind.STRUCT:
+                    # 查找結構體欄位的類型
+                    field_index = obj_type.field_names.index(expr.member)
+                    return obj_type.field_types[field_index]
+                elif obj_type.kind == TypeKind.MAP:
+                    # 映射訪問返回值類型
+                    return obj_type.value_type
+        
+        elif isinstance(expr, ast_nodes.IndexAccess):
+            # 推導索引訪問的類型
+            obj_type = self._infer_type(expr.object)
+            if obj_type:
+                if obj_type.kind in [TypeKind.ARRAY, TypeKind.LIST]:
+                    return obj_type.element_type
+                elif obj_type.kind == TypeKind.MAP:
+                    return obj_type.value_type
+                elif obj_type.name == "string":
+                    return TypeSystem.get_type("char")
+        
+        return None
+    
+    def _find_common_type(self, types: List[GluxType]) -> GluxType:
+        """
+        找到一組類型的共同類型
+        
+        Args:
+            types: 類型列表
+            
+        Returns:
+            共同類型
+        """
+        if not types:
+            return TypeSystem.get_type("any")
+        
+        # 如果所有類型都相同，返回該類型
+        if all(t == types[0] for t in types):
+            return types[0]
+        
+        # 如果都是數值類型，找到能容納所有值的最小類型
+        if all(TypeSystem.is_numeric_type(t.name) for t in types):
+            return self._find_common_numeric_type(*types)
+        
+        # 如果有字符串類型，且涉及字符串操作，返回字符串類型
+        if any(t.name == "string" for t in types):
+            return TypeSystem.get_type("string")
+        
+        # 如果類型不兼容，創建聯合類型
+        return TypeSystem.create_union_type(types)
+    
+    def _find_common_numeric_type(self, *types: GluxType) -> GluxType:
+        """
+        找到一組數值類型的共同類型
+        
+        Args:
+            *types: 數值類型列表
+            
+        Returns:
+            共同數值類型
+        """
+        # 如果有浮點數，結果是浮點數
+        if any(TypeSystem.is_float_type(t.name) for t in types):
+            # 如果有 f64，結果是 f64
+            if any(t.name == "f64" for t in types):
+                return TypeSystem.get_type("f64")
+            return TypeSystem.get_type("f32")
+        
+        # 對於整數類型，找到能容納所有值的最小類型
+        max_bits = max(TypeSystem.get_integer_size(t.name) for t in types)
+        
+        # 根據位數選擇適當的整數類型
+        if max_bits <= 8:
+            return TypeSystem.get_type("i8")
+        elif max_bits <= 16:
+            return TypeSystem.get_type("i16")
+        elif max_bits <= 32:
+            return TypeSystem.get_type("i32")
+        else:
+            return TypeSystem.get_type("i64")
+
+    def _check_spawn_expr(self, expr) -> Optional[GluxType]:
+        """
+        檢查 spawn 表達式的類型
+        
+        Args:
+            expr: spawn 表達式
+            
+        Returns:
+            spawn 表達式的返回類型
+        """
+        # 檢查函數調用
+        if not hasattr(expr, 'function_call') or not isinstance(expr.function_call, ast_nodes.CallExpression):
+            self.errors.append("spawn 必須包含一個函數調用")
+            return None
+        
+        # 檢查函數及其參數
+        func_type = self._check_expression(expr.function_call.callee)
+        
+        if not func_type or func_type.kind != TypeKind.FUNCTION:
+            self.errors.append("spawn 必須用於函數")
+            return None
+        
+        # 檢查參數
+        for i, arg in enumerate(expr.function_call.arguments):
+            arg_type = self._check_expression(arg)
+            if not arg_type:
+                continue
+                
+            # 檢查參數類型是否匹配
+            if i < len(func_type.parameter_types):
+                param_type = func_type.parameter_types[i]
+                if not TypeSystem.is_assignable(arg_type, param_type):
+                    self.errors.append(f"spawn 函數參數類型不匹配: 參數 {i+1} 需要 '{param_type.name}'，但獲得 '{arg_type.name}'")
+        
+        # 返回任務類型，包裝函數的返回類型
+        return TypeSystem.create_task_type(func_type.return_type)
+    
+    def _check_await_expr(self, expr) -> Optional[GluxType]:
+        """
+        檢查 await 表達式的類型
+        
+        Args:
+            expr: await 表達式
+            
+        Returns:
+            await 表達式的返回類型
+        """
+        if not hasattr(expr, 'expressions') or not expr.expressions:
+            self.errors.append("await 必須指定至少一個任務變量")
+            return None
+        
+        result_types = []
+        
+        for task_expr in expr.expressions:
+            task_type = self._check_expression(task_expr)
+            
+            if not task_type:
+                continue
+                
+            # 確保是任務類型
+            if task_type.kind != TypeKind.TASK:
+                self.errors.append(f"await 只能用於任務，不能用於 '{task_type.name}'")
+                continue
+                
+            # 獲取任務的結果類型
+            result_types.append(task_type.element_type)
+        
+        # 如果只有一個任務，返回該任務的結果類型
+        if len(result_types) == 1:
+            return result_types[0]
+        
+        # 如果有多個任務，返回元組類型
+        return TypeSystem.create_tuple_type(result_types) 

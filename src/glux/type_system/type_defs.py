@@ -26,6 +26,7 @@ class TypeKind(Enum):
     NULL = auto()       # 空值類型
     LIST = auto()       # 列表類型
     OPTIONAL = auto()   # 可選類型
+    TASK = auto()       # 並發任務類型
 
 
 class NumericType(Enum):
