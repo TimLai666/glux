@@ -1,0 +1,30 @@
+// 字符串插值測試
+name := "張三"
+age := 25
+
+// 使用單個變量的字符串插值
+println(`你好，${name}！`)
+
+// 使用多個變量的字符串插值
+println(`${name}的年齡是${age}歲。`)
+
+// 使用表達式的字符串插值
+println(`明年${name}將會是${age + 1}歲。`)
+
+// 混合字符串插值和普通輸出
+println("普通字符串", name, age)
+
+// 嵌套字符串插值
+message := `${name}今年${age}歲`
+println(`消息是：${message}`)
+
+main {
+    // 在main塊中測試字符串插值
+    x := 10
+    y := 20
+    println(`x + y = ${x + y}`)
+    
+    // 測試不帶換行的字符串插值
+    print(`這是${name}，`)
+    println(`他${age}歲了。`)
+} 

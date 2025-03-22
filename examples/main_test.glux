@@ -1,0 +1,27 @@
+// 測試 main 區塊功能
+
+println("這是全局代碼，不在 main 區塊內")
+
+// 這是全局變量，不在 main 區塊內
+x := 10
+println(`全局變量 x 初始化為: ${x}`)
+
+// 這是函數定義，不在 main 區塊內
+fn add(a: int, b: int) -> int {
+    return a + b
+}
+
+println("函數定義完成")
+
+// main 區塊，只有當此文件作為入口時才會執行
+main {
+    println("======= 執行 main 區塊 =======")
+    println("這是 main 區塊內的代碼")
+    println(`x 的值是: ${x}`)
+    
+    y := add(5, 8)
+    println(`5 + 8 = ${y}`)
+    println("======= main 區塊結束 =======")
+} 
+
+println("這行代碼在 main 區塊之後，理論上也應該執行") 

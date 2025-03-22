@@ -75,8 +75,8 @@ class TypeChecker:
         # 檢查參數
         for param in func.params:
             param_type = None
-            if param.type_annotation:
-                param_type_name = param.type_annotation.name
+            if param.type_hint:
+                param_type_name = param.type_hint.name
                 type_symbol = self.symbol_table.resolve_type(param_type_name)
                 if not type_symbol:
                     self.errors.append(f"未知參數類型 '{param_type_name}' 於參數 '{param.name}' 在函數 '{func.name}'")

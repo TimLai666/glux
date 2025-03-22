@@ -449,7 +449,7 @@ class FunctionCall(ASTNode):
 
 class Parameter(ASTNode):
     """函式參數"""
-    def __init__(self, name: str, type_hint: Optional[Type] = None, default_value: Optional[ASTNode] = None):
+    def __init__(self, name: str, type_hint: Optional[TypeExpression] = None, default_value: Optional[Expression] = None):
         self.name = name  # 參數名稱
         self.type_hint = type_hint  # 類型提示
         self.default_value = default_value  # 預設值
@@ -641,12 +641,21 @@ class DerefExpr(ASTNode):
 
 
 class BlockStatement(ASTNode):
-    """代碼區塊，用於分組語句"""
+    """區塊語句節點，包含一系列語句"""
     def __init__(self, statements: List[ASTNode]):
-        self.statements = statements  # 語句列表
+        self.statements = statements
 
     def __repr__(self) -> str:
-        return "{ ... }"
+        return f"BlockStatement({len(self.statements)} statements)"
+
+
+class MainBlock(ASTNode):
+    """main區塊節點，表示程式入口點"""
+    def __init__(self, statements: List[ASTNode]):
+        self.statements = statements
+
+    def __repr__(self) -> str:
+        return f"MainBlock({len(self.statements)} statements)"
 
 
 class MemberAccess(ASTNode):

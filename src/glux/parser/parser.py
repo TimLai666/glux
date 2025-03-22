@@ -49,28 +49,35 @@ class Parser:
             return ast_nodes.Module([])
     
     def declaration(self) -> ast_nodes.Declaration:
-        """解析聲明語句"""
-        # 嘗試各種聲明語句
-        if self.match(TokenType.FN):
-            return self.function_declaration()
+        """
+        解析聲明語句
         
-        if self.match(TokenType.STRUCT):
-            return self.struct_declaration()
+        Returns:
+            聲明節點
+        """
+        try:
+            if self.match(TokenType.CONST):
+                return self.const_declaration()
+            elif self.match(TokenType.FN):
+                return self.function_declaration()
+            elif self.match(TokenType.STRUCT):
+                return self.struct_declaration()
+            elif self.match(TokenType.ENUM):
+                return self.enum_declaration()
+            elif self.match(TokenType.IMPORT, TokenType.FROM):
+                return self.import_declaration()
+            elif self.match(TokenType.MAIN):
+                return self.main_block()
+            elif self.check(TokenType.IDENTIFIER) and self.peek_next().type == TokenType.COLONEQ:
+                return self.var_declaration()
+                
+            # 變數聲明或表達式語句
+            return self.statement()
             
-        if self.match(TokenType.ENUM):
-            return self.enum_declaration()
-            
-        if self.match(TokenType.IMPORT):
-            return self.import_declaration()
-            
-        if self.peek().type == TokenType.IDENTIFIER and self.peek_next().type == TokenType.COLONEQ:
-            return self.var_declaration()
-            
-        if self.match(TokenType.CONST):
-            return self.const_declaration()
-            
-        # 不是聲明語句，嘗試解析陳述句
-        return self.statement()
+        except Exception as e:
+            self.error(str(e))
+            self.synchronize()
+            return ast_nodes.ExpressionStatement(ast_nodes.ErrorExpression("語法錯誤"))
     
     def function_declaration(self) -> ast_nodes.FunctionDeclaration:
         """
@@ -111,10 +118,18 @@ class Parser:
             參數 AST 節點
         """
         name = self.consume(TokenType.IDENTIFIER, "期望參數名稱").lexeme
-        self.consume(TokenType.COLON, "期望 ':' 在參數名稱之後")
-        param_type = self.type_expression()
         
-        return ast_nodes.Parameter(name, param_type)
+        # 可選的類型註解
+        param_type = None
+        if self.match(TokenType.COLON):
+            param_type = self.type_expression()
+        
+        # 可選的默認值
+        default_value = None
+        if self.match(TokenType.EQUAL):
+            default_value = self.expression()
+        
+        return ast_nodes.Parameter(name, param_type, default_value)
     
     def struct_declaration(self) -> ast_nodes.StructDeclaration:
         """
@@ -951,6 +966,26 @@ class Parser:
         
         # 創建並返回 ImportDeclaration 節點
         return ast_nodes.ImportDeclaration(from_module, imports)
+    
+    def main_block(self) -> ast_nodes.MainBlock:
+        """
+        解析main區塊
+        
+        Returns:
+            MainBlock節點
+        """
+        # 期望左大括號
+        self.consume(TokenType.LEFT_BRACE, "期望 '{' 在 main 之後")
+        
+        # 解析區塊語句
+        statements = []
+        while not self.check(TokenType.RIGHT_BRACE) and not self.is_at_end():
+            statements.append(self.declaration())
+            
+        # 期望右大括號
+        self.consume(TokenType.RIGHT_BRACE, "期望 '}' 結束 main 區塊")
+        
+        return ast_nodes.MainBlock(statements)
     
     # 輔助方法
     

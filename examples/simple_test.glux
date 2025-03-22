@@ -1,0 +1,9 @@
+// 簡單測試文件
+
+println("全局代碼 1")
+println("全局代碼 2")
+
+main {
+    println("main 區塊代碼 1")
+    println("main 區塊代碼 2")
+} 
