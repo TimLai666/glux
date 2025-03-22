@@ -263,6 +263,7 @@ class GluxCompiler:
             # 生成包裝腳本內容
             wrapper_content = f'''#!/usr/bin/env python3
 import sys
+import os
 from llvmlite import binding as llvm
 
 def main():
@@ -271,9 +272,21 @@ def main():
     llvm.initialize_native_target()
     llvm.initialize_native_asmprinter()
     
-    # 讀取IR文件
-    with open("{ll_file}", "r") as f:
-        ir = f.read()
+    # 獲取當前腳本的絕對路徑和目錄
+    script_path = os.path.abspath(__file__)
+    script_dir = os.path.dirname(script_path)
+    
+    # 獲取 IR 文件的絕對路徑
+    ll_file = os.path.join(script_dir, os.path.basename("{ll_file}"))
+    
+    # 讀取IR文件（使用UTF-8編碼）
+    try:
+        with open(ll_file, "r", encoding="utf-8") as f:
+            ir = f.read()
+    except UnicodeDecodeError:
+        # 如果UTF-8失敗，嘗試其他編碼
+        with open(ll_file, "r", encoding="latin-1") as f:
+            ir = f.read()
     
     # 創建模塊
     module = llvm.parse_assembly(ir)

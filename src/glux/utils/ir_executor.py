@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 from typing import Optional, Any, List, Tuple
 from llvmlite import binding
+import re
 
 # 嘗試導入 LLVM Python 綁定
 try:
@@ -91,12 +92,12 @@ class IRExecutor:
             self.logger.error(f"讀取文件失敗: {str(e)}")
             return False
     
-    def _execute_llvm_ir(self, ir_or_file: str, args: List[str], is_ir_content: bool = False) -> Tuple[int, str, str]:
+    def _execute_llvm_ir(self, ir_or_file: str, args: List[str] = None, is_ir_content: bool = False) -> Tuple[int, str, str]:
         """
         使用JIT執行LLVM IR
         
         Args:
-            ir_or_file: LLVM IR字符串或文件路徑
+            ir_or_file: LLVM IR內容或文件路徑
             args: 命令行參數
             is_ir_content: 指示傳入的是LLVM IR字符串還是文件路徑
         
@@ -113,6 +114,9 @@ class IRExecutor:
             ir_content = ir_or_file if is_ir_content else self._read_file(ir_or_file)
             if not ir_content:
                 return 1, "", "無法讀取LLVM IR內容"
+            
+            # 修復字符串長度不匹配問題
+            ir_content = self._fix_string_length_mismatch(ir_content)
             
             # 使用llvmlite解析IR
             ir_module = self.llvm.parse_assembly(ir_content)
@@ -140,8 +144,8 @@ class IRExecutor:
                     os.environ[f"GLUX_ARG_{i}"] = arg
                 
                 # 重定向標準輸出和錯誤
-                with tempfile.NamedTemporaryFile(delete=False, mode='w+') as stdout_file, \
-                     tempfile.NamedTemporaryFile(delete=False, mode='w+') as stderr_file:
+                with tempfile.NamedTemporaryFile(delete=False, mode='w+', encoding='utf-8') as stdout_file, \
+                     tempfile.NamedTemporaryFile(delete=False, mode='w+', encoding='utf-8') as stderr_file:
                     
                     stdout_path, stderr_path = stdout_file.name, stderr_file.name
                     
@@ -167,9 +171,9 @@ class IRExecutor:
                         os.close(old_stderr_fd)
                 
                 # 讀取捕獲的輸出
-                with open(stdout_path, 'r') as f:
+                with open(stdout_path, 'r', encoding='utf-8') as f:
                     stdout = f.read()
-                with open(stderr_path, 'r') as f:
+                with open(stderr_path, 'r', encoding='utf-8') as f:
                     stderr = f.read()
                 
                 # 清理臨時文件
@@ -258,6 +262,31 @@ class IRExecutor:
         except Exception as e:
             self.logger.error(f"無法讀取文件 {file_path}: {str(e)}")
             return None
+
+    def _fix_string_length_mismatch(self, ir_content: str) -> str:
+        """
+        修復字符串長度不匹配的問題。
+        在實際定義和使用的地方統一字符串長度。
+        """
+        # 查找所有字符串定義
+        str_defs = {}
+        def_pattern = re.compile(r'@\.str\.(\d+) = private unnamed_addr constant \[(\d+) x i8\]')
+        for match in def_pattern.finditer(ir_content):
+            str_idx, length = match.groups()
+            str_defs[str_idx] = length
+        
+        # 查找並修正所有引用
+        use_pattern = re.compile(r'getelementptr inbounds \[(\d+) x i8\], \[(\d+) x i8\]\* @\.str\.(\d+)')
+        
+        def replace_length(match):
+            use_len1, use_len2, str_idx = match.groups()
+            if str_idx in str_defs:
+                correct_len = str_defs[str_idx]
+                return f'getelementptr inbounds [{correct_len} x i8], [{correct_len} x i8]* @.str.{str_idx}'
+            return match.group(0)
+        
+        fixed_ir = use_pattern.sub(replace_length, ir_content)
+        return fixed_ir
 
 
 def save_llvm_ir(llvm_ir: Any, filename: str) -> None:

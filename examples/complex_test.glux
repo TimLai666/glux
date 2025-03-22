@@ -1,0 +1,32 @@
+// 複雜測試文件
+// 測試變量聲明、賦值、條件判斷和循環
+
+println("程序開始執行")
+
+// 全局變量聲明
+global_num := 10
+println("全局變量的值：" + global_num)
+
+main {
+    // 局部變量聲明
+    local_num := 5
+    println("局部變量的值：" + local_num)
+    
+    // 變量賦值
+    local_num = local_num + global_num
+    println("修改後的局部變量：" + local_num)
+    
+    // 條件判斷
+    if (local_num > 10) {
+        println("局部變量大於10")
+    }
+    
+    // 簡單循環
+    i := 0
+    while (i < 3) {
+        println("循環計數：" + i)
+        i = i + 1
+    }
+    
+    println("程序執行完成")
+} 

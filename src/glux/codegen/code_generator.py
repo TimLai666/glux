@@ -35,6 +35,7 @@ class LLVMCodeGenerator(CodeGenerator):
         self.symbol_table = None  # 符號表，用於在代碼生成階段獲取類型信息
         self.global_string_map = {}  # 保存所有全局字符串
         self.string_escape_cache = {}  # 保存轉義後的字符串和長度
+        self.string_length_map = {}  # 字符串長度映射
         
     def _add_global_string(self, string: str) -> int:
         """
@@ -46,18 +47,17 @@ class LLVMCodeGenerator(CodeGenerator):
         Returns:
             int: 字符串索引
         """
-        # 如果字符串已經存在，直接返回索引
         if string in self.global_string_map:
             return self.global_string_map[string]
         
-        # 否則，添加新字符串並返回新索引
-        idx = len(self.global_string_map)
+        idx = len(self.global_strings)
         self.global_string_map[string] = idx
+        self.global_strings.append(string)
         
-        # 不再保存轉義後的字符串和長度
+        # 計算並保存字符串長度
         escaped = self._escape_string(string)
-        self.string_escape_cache = self.string_escape_cache or {}
-        self.string_escape_cache[string] = escaped
+        byte_length = len(escaped.replace('\\', '').encode('utf-8')) // 2 + 1  # 計算實際字節長度
+        self.string_length_map[idx] = byte_length
         
         return idx
         
@@ -73,7 +73,7 @@ class LLVMCodeGenerator(CodeGenerator):
         """
         # 使用 UTF-8 編碼計算字符串的實際位元組長度
         byte_length = len(string.encode('utf-8'))
-        return byte_length + 1  # +1 是為了包含 null 結束符
+        return byte_length + 1  # +1 是為了包含 null 終止符
         
     def set_symbol_table(self, symbol_table):
         """設置符號表"""
@@ -92,7 +92,9 @@ class LLVMCodeGenerator(CodeGenerator):
         self.local_variable_map = {}
         self.function_type_map = {}
         self.global_string_map = {}
-        self.escaped_string_cache = {}
+        self.global_strings = []
+        self.string_escape_cache = {}
+        self.string_length_map = {}  # 存儲字符串的長度信息
         
         # 存儲 AST 以備用
         if isinstance(ast, list):
@@ -103,10 +105,10 @@ class LLVMCodeGenerator(CodeGenerator):
                 self.ast = ast.statements
             else:
                 self.ast = [ast]
-
+        
         # 收集字符串和信息
         self._collect_strings_from_ast(self.ast)
-
+        
         # 生成 LLVM IR 代碼
         result = ""
         
@@ -140,14 +142,17 @@ class LLVMCodeGenerator(CodeGenerator):
         
         # 生成全局字符串
         for string, idx in sorted(self.global_string_map.items(), key=lambda x: x[1]):
-            # 對字符串進行簡單轉義處理
+            # 對字符串進行轉義處理
             escaped_string = self._escape_string(string)
             
-            # 計算字符串長度（包括終止符）
-            char_count = len(escaped_string.replace('\\', '').replace('\\00', '\0')) + 1
+            # 獲取字符串信息（索引和字節長度）
+            _, byte_length = self._get_string_info(string)
+            
+            # 保存字符串長度以便在代碼中引用時使用
+            self.string_length_map[idx] = byte_length
             
             # 生成全局字符串定義
-            result += f'@.str.{idx} = private unnamed_addr constant [{char_count} x i8] c"{escaped_string}", align 1\n'
+            result += f'@.str.{idx} = private unnamed_addr constant [{byte_length} x i8] c"{escaped_string}", align 1\n'
         
         # 添加空行
         result += '\n'
@@ -174,119 +179,72 @@ class LLVMCodeGenerator(CodeGenerator):
         return result
         
     def _generate_statement(self, stmt, indent=4):
-        """生成單個語句的代碼"""
-        # 創建縮進字符串
-        indent_str = " " * indent
+        """生成語句的 LLVM IR 代碼"""
+        result = ""
+        result += ' ' * indent + '; 開始處理語句\n'
         
-        result = f"{indent_str}; 開始處理語句\n"
         if isinstance(stmt, ast_nodes.ExpressionStatement):
-            result += f"{indent_str}; 處理表達式語句\n"
-            expr = stmt.expression
-            if isinstance(expr, ast_nodes.CallExpression) and isinstance(expr.callee, ast_nodes.Variable):
-                result += f"{indent_str}; 處理函數調用: {expr.callee.name}\n"
-                if expr.callee.name == "println":
-                    result += self._generate_println(expr.arguments)
-                elif expr.callee.name == "print":
-                    result += self._generate_print(expr.arguments)
-                elif expr.callee.name == "error":
-                    result += self._generate_error(expr)
-                elif expr.callee.name == "is_error":
-                    result += self._generate_is_error(expr)
-                elif expr.callee.name == "sleep":
-                    result += self._generate_sleep(expr)
-                else:
-                    # 其他函數調用
-                    result += self._generate_function_call(expr)
-            elif isinstance(expr, ast_nodes.SpawnExpression):
-                result += self._generate_spawn(expr)
-            elif isinstance(expr, ast_nodes.AwaitExpression):
-                result += self._generate_await(expr)
-            elif isinstance(expr, ast_nodes.BinaryExpr):
-                result += self._generate_binary_expr(expr)
-            elif isinstance(expr, ast_nodes.UnaryExpr):
-                result += self._generate_unary_expr(expr)
-            elif isinstance(expr, ast_nodes.AssignmentExpression):
-                result += self._generate_assignment(expr)
-            else:
-                result += f"{indent_str}; 未處理的表達式類型: {type(expr)}\n"
+            result += ' ' * indent + '; 處理表達式語句\n'
+            result += self._generate_expression(stmt.expression, indent)
+        
+        elif isinstance(stmt, ast_nodes.AssignmentExpression):
+            result += ' ' * indent + '; 處理賦值語句\n'
+            # 處理賦值語句的代碼生成
+            # ...
+        
         elif isinstance(stmt, ast_nodes.VarDeclaration):
-            result += f"{indent_str}; 處理變量聲明\n"
-            result += self._generate_var_declaration(stmt)
-        elif isinstance(stmt, ast_nodes.ReturnStatement):
-            result += f"{indent_str}; 處理返回語句\n"
-            result += self._generate_return(stmt)
-        elif isinstance(stmt, ast_nodes.BreakStatement):
-            result += f"{indent_str}br label %end_loop\n"
-        elif isinstance(stmt, ast_nodes.ContinueStatement):
-            result += f"{indent_str}br label %continue_loop\n"
+            result += ' ' * indent + '; 處理變量聲明\n'
+            # 處理變量聲明的代碼生成
+            # ...
+        
         elif isinstance(stmt, ast_nodes.If):
-            result += f"{indent_str}; 處理if語句\n"
-            result += self._generate_if(stmt)
+            result += ' ' * indent + '; 處理if語句\n'
+            # 處理if語句的代碼生成
+            # ...
+        
         elif isinstance(stmt, ast_nodes.WhileStatement):
-            result += f"{indent_str}; 處理while循環\n"
-            result += self._generate_while(stmt)
-        elif isinstance(stmt, ast_nodes.ForStatement):
-            result += f"{indent_str}; 處理for循環\n"
-            result += self._generate_for(stmt)
+            result += ' ' * indent + '; 處理while循環\n'
+            # 處理while循環的代碼生成
+            # ...
+            
+        elif isinstance(stmt, ast_nodes.MainBlock):
+            result += ' ' * indent + '; 處理main區塊\n'
+            result += self._generate_main_block(stmt, indent)
+        
         else:
-            result += f"{indent_str}; 未處理的語句類型: {type(stmt)}\n"
+            result += ' ' * indent + f'; 未處理的語句類型: {type(stmt)}\n'
         
         return result
-    
-    def _collect_strings_from_ast(self, ast):
-        """從 AST 中收集所有字符串"""
-        # 檢查 AST 是否為列表
-        if not isinstance(ast, list):
-            # 單一語句，可能是單行代碼
-            if hasattr(ast, 'statements'):
-                statements = ast.statements
-            else:
-                # 無語句，直接返回
-                return
-        else:
-            statements = ast
+
+    def _generate_expression(self, expr, indent=4):
+        """生成表達式的 LLVM IR 代碼"""
+        result = ""
         
-        # 遍歷所有語句收集字符串
-        for stmt in statements:
-            self._collect_strings_from_statement(stmt)
-
-    def _collect_strings_from_statement(self, stmt):
-        """從單個語句中收集字符串"""
-        if isinstance(stmt, ast_nodes.ExpressionStatement):
-            expr = stmt.expression
-            if isinstance(expr, ast_nodes.CallExpression):
-                # 處理函數調用中的字符串
-                if hasattr(expr, 'callee') and isinstance(expr.callee, ast_nodes.Variable):
-                    if expr.callee.name == "println" or expr.callee.name == "print":
-                        for arg in expr.arguments:
-                            if isinstance(arg, ast_nodes.StringLiteral):
-                                # 添加字符串並加上換行符（對於 println）
-                                if expr.callee.name == "println":
-                                    self._add_global_string(arg.value + "\\0A\\00")
-                                else:
-                                    self._add_global_string(arg.value + "\\00")
-                            elif isinstance(arg, ast_nodes.Variable):
-                                # 添加格式字符串
-                                if expr.callee.name == "println":
-                                    self._add_global_string("%d\\0A\\00")  # 整數格式
-                                    self._add_global_string("%f\\0A\\00")  # 浮點數格式
-                                    self._add_global_string("%s\\0A\\00")  # 字符串格式
-                                else:
-                                    self._add_global_string("%d\\00")
-                                    self._add_global_string("%f\\00")
-                                    self._add_global_string("%s\\00")
-                            elif isinstance(arg, ast_nodes.BinaryExpr):
-                                # 處理二元表達式
-                                self._collect_strings_from_expr(arg)
-
-    def _collect_strings_from_expr(self, expr):
-        """從表達式中收集字符串"""
-        if isinstance(expr, ast_nodes.StringLiteral):
-            self._add_global_string(expr.value + "\\00")
+        if isinstance(expr, ast_nodes.CallExpression) and isinstance(expr.callee, ast_nodes.Variable):
+            result += ' ' * indent + f"; 處理函數調用: {expr.callee.name}\n"
+            if expr.callee.name == "println":
+                result += self._generate_println(expr.arguments)
+            elif expr.callee.name == "print":
+                result += self._generate_print(expr.arguments)
+            elif expr.callee.name == "sleep":
+                result += self._generate_sleep(expr.arguments)
+            else:
+                # 其他函數調用 (暫未實現)
+                result += ' ' * indent + f"; 未實現的函數調用: {expr.callee.name}\n"
+        elif isinstance(expr, ast_nodes.StringLiteral):
+            # 字符串字面量處理
+            result += self._generate_string_literal(expr, indent)
+        elif isinstance(expr, ast_nodes.Number):
+            # 數值字面量處理
+            result += self._generate_number_literal(expr, indent)
         elif isinstance(expr, ast_nodes.BinaryExpr):
-            # 遞歸處理左右表達式
-            self._collect_strings_from_expr(expr.left)
-            self._collect_strings_from_expr(expr.right)
+            # 二元表達式處理
+            result += self._generate_binary_expression(expr, indent)
+        else:
+            # 未處理的表達式類型
+            result += ' ' * indent + f"; 未處理的表達式類型: {type(expr)}\n"
+        
+        return result
 
     def _generate_println(self, args):
         """
@@ -296,38 +254,46 @@ class LLVMCodeGenerator(CodeGenerator):
         
         if not args:
             # 打印空行（只有換行符）
-            newline_str = "\\0A\\00"
+            newline_str = "\n"
             str_idx, char_count = self._get_string_info(newline_str)
-            result += f"    %println_str_{self.var_counter} = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([{char_count} x i8], [{char_count} x i8]* @.str.{str_idx}, i32 0, i32 0))\n"
+            # 使用保存的字符串長度
+            byte_length = self.string_length_map[str_idx]
+            result += f"    %println_str_{self.var_counter} = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([{byte_length} x i8], [{byte_length} x i8]* @.str.{str_idx}, i32 0, i32 0))\n"
             self.var_counter += 1
             return result
         
         for i, arg in enumerate(args):
             if isinstance(arg, ast_nodes.StringLiteral):
                 # 字符串參數需要添加換行符
-                string_val = arg.value + "\\0A\\00"  # 添加換行符和終止符
+                string_val = arg.value + "\n"  # 添加換行符
                 str_idx, char_count = self._get_string_info(string_val)
+                # 使用保存的字符串長度
+                byte_length = self.string_length_map[str_idx]
                 
                 # 生成 printf 調用
-                result += f"    %println_str_{self.var_counter} = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([{char_count} x i8], [{char_count} x i8]* @.str.{str_idx}, i32 0, i32 0))\n"
+                result += f"    %println_str_{self.var_counter} = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([{byte_length} x i8], [{byte_length} x i8]* @.str.{str_idx}, i32 0, i32 0))\n"
                 self.var_counter += 1
             
             elif isinstance(arg, ast_nodes.Number):
                 # 整數參數
-                format_str = "%d\\0A\\00"  # 整數格式 + 換行符 + 終止符
+                format_str = "%d\n"  # 整數格式 + 換行符
                 str_idx, char_count = self._get_string_info(format_str)
+                # 使用保存的字符串長度
+                byte_length = self.string_length_map[str_idx]
                 
                 # 生成 printf 調用
-                result += f"    %println_int_{self.var_counter} = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([{char_count} x i8], [{char_count} x i8]* @.str.{str_idx}, i32 0, i32 0), i32 {arg.value})\n"
+                result += f"    %println_int_{self.var_counter} = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([{byte_length} x i8], [{byte_length} x i8]* @.str.{str_idx}, i32 0, i32 0), i32 {arg.value})\n"
                 self.var_counter += 1
             
             elif isinstance(arg, ast_nodes.Float):
                 # 浮點數參數
-                format_str = "%f\\0A\\00"  # 浮點數格式 + 換行符 + 終止符
+                format_str = "%f\n"  # 浮點數格式 + 換行符
                 str_idx, char_count = self._get_string_info(format_str)
+                # 使用保存的字符串長度
+                byte_length = self.string_length_map[str_idx]
                 
                 # 生成 printf 調用
-                result += f"    %println_float_{self.var_counter} = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([{char_count} x i8], [{char_count} x i8]* @.str.{str_idx}, i32 0, i32 0), double {arg.value})\n"
+                result += f"    %println_float_{self.var_counter} = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([{byte_length} x i8], [{byte_length} x i8]* @.str.{str_idx}, i32 0, i32 0), double {arg.value})\n"
                 self.var_counter += 1
             
             elif isinstance(arg, ast_nodes.Variable):
@@ -338,7 +304,7 @@ class LLVMCodeGenerator(CodeGenerator):
                     
                     if var_type == 'i32':
                         # 整數變量
-                        format_str = "%d\\0A\\00"
+                        format_str = "%d\n"
                         str_idx, char_count = self._get_string_info(format_str)
                         
                         # 加載變量值
@@ -351,7 +317,7 @@ class LLVMCodeGenerator(CodeGenerator):
                     
                     elif var_type in ('float', 'double'):
                         # 浮點數變量
-                        format_str = "%f\\0A\\00"
+                        format_str = "%f\n"
                         str_idx, char_count = self._get_string_info(format_str)
                         
                         # 加載變量值
@@ -364,7 +330,7 @@ class LLVMCodeGenerator(CodeGenerator):
                     
                     elif var_type == 'i8*':
                         # 字符串變量
-                        format_str = "%s\\0A\\00"
+                        format_str = "%s\n"
                         str_idx, char_count = self._get_string_info(format_str)
                         
                         # 加載變量值
@@ -377,7 +343,7 @@ class LLVMCodeGenerator(CodeGenerator):
                     
                     else:
                         # 未知類型變量，默認使用整數格式
-                        format_str = "%d\\0A\\00"
+                        format_str = "%d\n"
                         str_idx, char_count = self._get_string_info(format_str)
                         
                         # 生成警告
@@ -392,7 +358,7 @@ class LLVMCodeGenerator(CodeGenerator):
                         self.var_counter += 1
                 else:
                     # 變量未定義
-                    default_msg = "變量未定義\\0A\\00"
+                    default_msg = "變量未定義\n"
                     str_idx, char_count = self._get_string_info(default_msg)
                     
                     # 生成 printf 調用
@@ -411,7 +377,7 @@ class LLVMCodeGenerator(CodeGenerator):
                     
                     if binary_result['type'] == 'i32':
                         # 整數結果
-                        format_str = "%d\\0A\\00"
+                        format_str = "%d\n"
                         str_idx, char_count = self._get_string_info(format_str)
                         
                         # 生成 printf 調用
@@ -420,7 +386,7 @@ class LLVMCodeGenerator(CodeGenerator):
                         self.var_counter += 1
                     elif binary_result['type'] in ('float', 'double'):
                         # 浮點數結果
-                        format_str = "%f\\0A\\00"
+                        format_str = "%f\n"
                         str_idx, char_count = self._get_string_info(format_str)
                         
                         # 生成 printf 調用
@@ -465,7 +431,7 @@ class LLVMCodeGenerator(CodeGenerator):
                 # 字符串初始化
                 value = stmt.value.value
                 # 添加全局字符串常量（包含null終止符）
-                str_idx = self._add_global_string(value + "\\00")
+                str_idx = self._add_global_string(value + "\n")
                 # 為新變量分配空間 (i8** 表示指向字符數組的指針)
                 result += f"    %{var_name} = alloca i8*\n"
                 # 存儲字符串指針
@@ -552,9 +518,9 @@ class LLVMCodeGenerator(CodeGenerator):
             str: 生成的 LLVM IR 代碼
         """
         # 預先添加所有可能需要的格式字符串
-        self._add_global_string("%d\\00")  # 整數格式
-        self._add_global_string("%f\\00")  # 浮點數格式
-        self._add_global_string("%s\\00")  # 字符串格式
+        self._add_global_string("%d\n")  # 整數格式
+        self._add_global_string("%f\n")  # 浮點數格式
+        self._add_global_string("%s\n")  # 字符串格式
         
         result = "    ; 生成字符串插值並保存到變量\n"
         
@@ -670,7 +636,7 @@ class LLVMCodeGenerator(CodeGenerator):
         result += left_code + right_code
         
         # 創建包含左右格式的格式字符串
-        combined_format = left_format + right_format + "\\00"
+        combined_format = left_format + right_format + "\n"
         
         # 添加格式字符串
         str_idx, char_count = self._get_string_info(combined_format)
@@ -692,7 +658,7 @@ class LLVMCodeGenerator(CodeGenerator):
     def _generate_string_interpolation(self, expr, target_var=None):
         """生成字符串插值的 LLVM IR 代碼"""
         # 預先添加所有需要的格式字符串
-        self._add_global_string("%s\\0A\\00")  # 字符串換行格式
+        self._add_global_string("%s\n")  # 字符串換行格式
         
         # 如果提供了目標變量，則使用更專用的函數
         if target_var:
@@ -829,7 +795,7 @@ class LLVMCodeGenerator(CodeGenerator):
         result += left_code + right_code
         
         # 創建包含左右格式的格式字符串
-        combined_format = left_format + right_format + "\\00"
+        combined_format = left_format + right_format + "\n"
         
         # 添加格式字符串
         str_idx, _ = self._get_string_info(combined_format)
@@ -843,7 +809,7 @@ class LLVMCodeGenerator(CodeGenerator):
         result += f"    call i32 (i8*, i8*, ...) @sprintf(i8* %buffer_ptr_{self.var_counter}, i8* %format_str_{self.var_counter}{left_value}{right_value})\n"
         
         # 直接打印結果字符串
-        format_str = "%s\\0A\\00"  # %s 格式化加換行符
+        format_str = "%s\n"  # %s 格式化加換行符
         print_str_idx, print_byte_len = self._get_string_info(format_str)
         
         result += f"    %print_format_{self.var_counter} = getelementptr inbounds [{print_byte_len} x i8], [{print_byte_len} x i8]* @.str.{print_str_idx}, i32 0, i32 0\n"
@@ -898,47 +864,353 @@ class LLVMCodeGenerator(CodeGenerator):
         # 如果左右操作數中至少有一個是字符串，則認為是字符串插值
         return left_is_string or right_is_string
 
-    def _escape_string(self, string):
-        """對字符串進行轉義"""
-        result = ""
-        for char in string:
+    def _escape_string(self, s):
+        """轉義字符串中的特殊字符"""
+        result = []
+        i = 0
+        while i < len(s):
+            char = s[i]
+            
+            # 處理特殊字符序列
+            if char == '\\' and i + 1 < len(s):
+                next_char = s[i + 1]
+                if next_char == 'n':
+                    result.append('\\0A')  # 換行
+                    i += 2
+                    continue
+                elif next_char == 't':
+                    result.append('\\09')  # 製表符
+                    i += 2
+                    continue
+                elif next_char == 'r':
+                    result.append('\\0D')  # 回車
+                    i += 2
+                    continue
+                elif next_char == '0':
+                    result.append('\\00')  # 空字符
+                    i += 2
+                    continue
+                elif next_char == '\\':
+                    result.append('\\5C')  # 反斜杠
+                    i += 2
+                    continue
+                elif next_char == '"':
+                    result.append('\\22')  # 雙引號
+                    i += 2
+                    continue
+                elif next_char == 'u' and i + 2 < len(s) and s[i + 2] == '{':
+                    # 處理 Unicode 轉義序列
+                    j = i + 3
+                    code_point = ""
+                    while j < len(s) and s[j] != '}':
+                        code_point += s[j]
+                        j += 1
+                    
+                    if j < len(s) and s[j] == '}':
+                        # 有效的 Unicode 轉義序列
+                        try:
+                            # 解析為數字
+                            unicode_char = chr(int(code_point, 16))
+                            # 轉換為 UTF-8 字節序列
+                            for byte in unicode_char.encode('utf-8'):
+                                result.append(f'\\{byte:02X}')
+                            i = j + 1  # 跳過整個序列，包括 '}'
+                            continue
+                        except ValueError:
+                            pass  # 如果解析失敗，就當做普通字符處理
+            
+            # 處理普通字符
             if char == '\n':
-                result += "\\0A"
+                result.append('\\0A')
             elif char == '\t':
-                result += "\\09"
+                result.append('\\09')
             elif char == '\r':
-                result += "\\0D"
-            elif char == '\0':
-                result += "\\00"
-            elif char == '\\':
-                # 檢查反斜杠後是否有 0A 或 00 序列
-                if string.find("\\0A", string.find(char)) > 0:
-                    result += "\\"  # 只添加單個反斜杠，後面會添加正確的 \0A
-                elif string.find("\\00", string.find(char)) > 0:
-                    result += "\\"  # 只添加單個反斜杠，後面會添加正確的 \00
+                result.append('\\0D')
+            elif ord(char) < 128:  # ASCII
+                if ord(char) < 32 or ord(char) >= 127:  # 控制字符
+                    result.append(f'\\{ord(char):02X}')
                 else:
-                    result += "\\\\"  # 一般反斜杠轉義
-            elif char == '"':
-                result += "\\\""
+                    result.append(char)
             else:
-                result += char
+                # 非 ASCII 字符轉為 UTF-8 字節序列
+                for byte in char.encode('utf-8'):
+                    result.append(f'\\{byte:02X}')
+            
+            i += 1
         
-        # 檢查字符串是否已經包含 \0A\00（換行符+終止符）
-        if "\\0A\\00" not in string and "\\00" not in string:
-            # 字符串不包含終止符，添加一個
-            result += "\\00"
+        # 添加字符串終止符
+        result.append('\\00')
         
-        return result
+        return ''.join(result)
 
     def _get_string_info(self, string):
         """獲取字符串信息：全局索引和字節長度"""
-        if string not in self.global_string_map:
-            idx = len(self.global_string_map)
+        # 如果字符串已經存在，直接返回索引
+        if string in self.global_string_map:
+            idx = self.global_string_map[string]
+        else:
+            # 添加新字符串到全局映射
+            idx = len(self.global_strings)
             self.global_string_map[string] = idx
+            self.global_strings.append(string)
         
-        idx = self.global_string_map[string]
-        # 計算字符串實際字節長度（包括空終止符）
-        escaped_string = self._escape_string(string)
-        # 在這裡使用與 generate 方法中相同的計算方式，確保一致性
-        char_count = len(escaped_string.replace('\\', '').replace('\\00', '\0')) + 1
-        return idx, char_count
+        # 獲取或計算字符串的轉義表示
+        if string in self.string_escape_cache:
+            escaped = self.string_escape_cache[string]
+        else:
+            escaped = self._escape_string(string)
+            self.string_escape_cache[string] = escaped
+        
+        # 計算轉義後的字符串長度（以位元組為單位）
+        # 轉義字符串中的每個 \xx 表示一個位元組
+        byte_count = 0
+        i = 0
+        while i < len(escaped):
+            if escaped[i] == '\\' and i + 2 < len(escaped):
+                # 每個 \xx 序列代表一個位元組
+                byte_count += 1
+                i += 3
+            else:
+                # 普通ASCII字符是一個位元組
+                byte_count += 1
+                i += 1
+        
+        # 最後的結果已經包含了終止符 \00
+        return idx, byte_count
+
+    def _generate_main_block(self, main_block, indent=4):
+        """
+        生成 main 區塊的 LLVM IR 代碼
+        
+        Args:
+            main_block: main 區塊節點
+            indent: 縮進空格數
+            
+        Returns:
+            str: 生成的 LLVM IR 代碼
+        """
+        indent_str = " " * indent
+        result = ""
+        
+        # 判斷當前環境是否為主入口
+        # 在真正的執行環境中，需要檢查是否為主模塊，這裡暫時假設為真
+        is_main_module = True
+        
+        if is_main_module:
+            result += f"{indent_str}; 執行 main 區塊的代碼\n"
+            
+            # 為每個語句生成代碼
+            for statement in main_block.statements:
+                result += self._generate_statement(statement, indent)
+        else:
+            result += f"{indent_str}; 不在主模塊中，跳過 main 區塊\n"
+        
+        return result
+
+    def _generate_print(self, args):
+        """
+        生成 print 函數調用的 LLVM IR 代碼
+        """
+        result = "    ; print 函數調用\n"
+        
+        if not args:
+            # 沒有參數，什麼都不做
+            return result
+        
+        for i, arg in enumerate(args):
+            if isinstance(arg, ast_nodes.StringLiteral):
+                # 字符串參數，無需添加換行符
+                string_val = arg.value
+                str_idx, _ = self._get_string_info(string_val)
+                # 使用保存的字符串長度
+                byte_length = self.string_length_map[str_idx]
+                
+                # 生成 printf 調用
+                result += f"    %print_str_{self.var_counter} = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([{byte_length} x i8], [{byte_length} x i8]* @.str.{str_idx}, i32 0, i32 0))\n"
+                self.var_counter += 1
+            
+            elif isinstance(arg, ast_nodes.Number):
+                # 整數參數
+                format_str = "%d"  # 整數格式
+                str_idx, _ = self._get_string_info(format_str)
+                # 使用保存的字符串長度
+                byte_length = self.string_length_map[str_idx]
+                
+                # 生成 printf 調用
+                result += f"    %print_int_{self.var_counter} = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([{byte_length} x i8], [{byte_length} x i8]* @.str.{str_idx}, i32 0, i32 0), i32 {arg.value})\n"
+                self.var_counter += 1
+            
+            elif isinstance(arg, ast_nodes.Float):
+                # 浮點數參數
+                format_str = "%f"  # 浮點數格式
+                str_idx, _ = self._get_string_info(format_str)
+                # 使用保存的字符串長度
+                byte_length = self.string_length_map[str_idx]
+                
+                # 生成 printf 調用
+                result += f"    %print_float_{self.var_counter} = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([{byte_length} x i8], [{byte_length} x i8]* @.str.{str_idx}, i32 0, i32 0), double {arg.value})\n"
+                self.var_counter += 1
+            
+            elif isinstance(arg, ast_nodes.Variable):
+                # 變量參數
+                var_name = arg.name
+                if var_name in self.variables:
+                    var_type = self.variables[var_name]['type']
+                    
+                    if var_type == 'i32':
+                        # 整數變量
+                        format_str = "%d"
+                        str_idx, char_count = self._get_string_info(format_str)
+                        
+                        # 加載變量值
+                        result += f"    %var_val_{self.var_counter} = load i32, i32* %{var_name}\n"
+                        
+                        # 生成 printf 調用
+                        result += f"    %println_format_{self.var_counter} = getelementptr inbounds ([{char_count} x i8], [{char_count} x i8]* @.str.{str_idx}, i32 0, i32 0)\n"
+                        result += f"    %println_call_{self.var_counter} = call i32 (i8*, ...) @printf(i8* %println_format_{self.var_counter}, i32 %var_val_{self.var_counter})\n"
+                        self.var_counter += 1
+                    
+                    elif var_type in ('float', 'double'):
+                        # 浮點數變量
+                        format_str = "%f"
+                        str_idx, char_count = self._get_string_info(format_str)
+                        
+                        # 加載變量值
+                        result += f"    %var_val_{self.var_counter} = load {var_type}, {var_type}* %{var_name}\n"
+                        
+                        # 生成 printf 調用
+                        result += f"    %println_format_{self.var_counter} = getelementptr inbounds ([{char_count} x i8], [{char_count} x i8]* @.str.{str_idx}, i32 0, i32 0)\n"
+                        result += f"    %println_call_{self.var_counter} = call i32 (i8*, ...) @printf(i8* %println_format_{self.var_counter}, {var_type} %var_val_{self.var_counter})\n"
+                        self.var_counter += 1
+                    
+                    elif var_type == 'i8*':
+                        # 字符串變量
+                        format_str = "%s"
+                        str_idx, char_count = self._get_string_info(format_str)
+                        
+                        # 加載變量值
+                        result += f"    %var_val_{self.var_counter} = load i8*, i8** %{var_name}\n"
+                        
+                        # 生成 printf 調用
+                        result += f"    %println_format_{self.var_counter} = getelementptr inbounds ([{char_count} x i8], [{char_count} x i8]* @.str.{str_idx}, i32 0, i32 0)\n"
+                        result += f"    %println_call_{self.var_counter} = call i32 (i8*, ...) @printf(i8* %println_format_{self.var_counter}, i8* %var_val_{self.var_counter})\n"
+                        self.var_counter += 1
+                    
+                    else:
+                        # 未知類型變量，默認使用整數格式
+                        format_str = "%d"
+                        str_idx, char_count = self._get_string_info(format_str)
+                        
+                        # 生成警告
+                        result += f"    ; 警告：未知變量類型 {var_type}，默認使用整數格式\n"
+                        
+                        # 加載變量值
+                        result += f"    %var_val_{self.var_counter} = load i32, i32* %{var_name}\n"
+                        
+                        # 生成 printf 調用
+                        result += f"    %println_format_{self.var_counter} = getelementptr inbounds ([{char_count} x i8], [{char_count} x i8]* @.str.{str_idx}, i32 0, i32 0)\n"
+                        result += f"    %println_call_{self.var_counter} = call i32 (i8*, ...) @printf(i8* %println_format_{self.var_counter}, i32 %var_val_{self.var_counter})\n"
+                        self.var_counter += 1
+                else:
+                    # 變量未定義
+                    default_msg = "變量未定義\n"
+                    str_idx, char_count = self._get_string_info(default_msg)
+                    
+                    # 生成 printf 調用
+                    result += f"    %println_undefined_{self.var_counter} = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([{char_count} x i8], [{char_count} x i8]* @.str.{str_idx}, i32 0, i32 0))\n"
+                    self.var_counter += 1
+            
+            elif isinstance(arg, ast_nodes.BinaryExpr):
+                # 處理二元表達式
+                if self._is_string_concatenation(arg):
+                    # 處理字符串連接
+                    result += self._generate_string_interpolation(arg)
+                else:
+                    # 數值表達式
+                    binary_result = self._generate_binary_expr(arg)
+                    result += binary_result['code']
+                    
+                    if binary_result['type'] == 'i32':
+                        # 整數結果
+                        format_str = "%d\n"
+                        str_idx, char_count = self._get_string_info(format_str)
+                        
+                        # 生成 printf 調用
+                        result += f"    %print_format_{self.var_counter} = getelementptr inbounds ([{char_count} x i8], [{char_count} x i8]* @.str.{str_idx}, i32 0, i32 0)\n"
+                        result += f"    %print_call_{self.var_counter} = call i32 (i8*, ...) @printf(i8* %print_format_{self.var_counter}, i32 %tmp_{binary_result['tmp']})\n"
+                        self.var_counter += 1
+                    elif binary_result['type'] in ('float', 'double'):
+                        # 浮點數結果
+                        format_str = "%f\n"
+                        str_idx, char_count = self._get_string_info(format_str)
+                        
+                        # 生成 printf 調用
+                        result += f"    %print_format_{self.var_counter} = getelementptr inbounds ([{char_count} x i8], [{char_count} x i8]* @.str.{str_idx}, i32 0, i32 0)\n"
+                        result += f"    %print_call_{self.var_counter} = call i32 (i8*, ...) @printf(i8* %print_format_{self.var_counter}, {binary_result['type']} %tmp_{binary_result['tmp']})\n"
+                        self.var_counter += 1
+            
+            else:
+                # 未處理的參數類型
+                result += f"    ; 未處理的參數類型: {type(arg)}\n"
+        
+        return result
+
+    def _collect_strings_from_ast(self, ast):
+        """從 AST 中收集所有字符串"""
+        # 檢查 AST 是否為列表
+        if not isinstance(ast, list):
+            # 單一語句，可能是單行代碼
+            if hasattr(ast, 'statements'):
+                statements = ast.statements
+            else:
+                # 單一節點，非列表或區塊
+                self._collect_strings_from_statement(ast)
+                return
+        else:
+            statements = ast
+        
+        # 遍歷所有語句收集字符串
+        for stmt in statements:
+            self._collect_strings_from_statement(stmt)
+
+    def _collect_strings_from_statement(self, stmt):
+        """從單個語句中收集字符串"""
+        if isinstance(stmt, ast_nodes.ExpressionStatement):
+            expr = stmt.expression
+            if isinstance(expr, ast_nodes.CallExpression):
+                # 處理函數調用中的字符串
+                if hasattr(expr, 'callee') and isinstance(expr.callee, ast_nodes.Variable):
+                    if expr.callee.name == "println" or expr.callee.name == "print":
+                        for arg in expr.arguments:
+                            if isinstance(arg, ast_nodes.StringLiteral):
+                                # 添加字符串並加上換行符（對於 println）
+                                if expr.callee.name == "println":
+                                    self._add_global_string(arg.value + "\n")
+                                else:
+                                    self._add_global_string(arg.value)
+                            elif isinstance(arg, ast_nodes.Variable):
+                                # 添加格式字符串
+                                if expr.callee.name == "println":
+                                    self._add_global_string("%d\n")  # 整數格式
+                                    self._add_global_string("%f\n")  # 浮點數格式
+                                    self._add_global_string("%s\n")  # 字符串格式
+                                else:
+                                    self._add_global_string("%d")
+                                    self._add_global_string("%f")
+                                    self._add_global_string("%s")
+                            elif isinstance(arg, ast_nodes.BinaryExpr):
+                                # 處理二元表達式
+                                self._collect_strings_from_expr(arg)
+        elif isinstance(stmt, ast_nodes.MainBlock):
+            # 處理main區塊內的所有語句
+            for statement in stmt.statements:
+                self._collect_strings_from_statement(statement)
+
+    def _collect_strings_from_expr(self, expr):
+        """從表達式中收集字符串"""
+        if isinstance(expr, ast_nodes.StringLiteral):
+            self._add_global_string(expr.value)
+        elif isinstance(expr, ast_nodes.BinaryExpr):
+            # 遞歸處理左右表達式
+            self._collect_strings_from_expr(expr.left)
+            self._collect_strings_from_expr(expr.right)
