@@ -1,0 +1,17 @@
+[package]
+name = "glux"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# 使用 Cranelift 作為純 Rust 實現的代碼生成後端
+cranelift = "0.94.0"
+cranelift-module = "0.94.0"
+cranelift-jit = "0.94.0"
+cranelift-native = "0.94.0"  # 添加缺失的 native 支援
+cranelift-codegen = "0.94.0" # 添加缺少的 codegen 依賴
+
+# 或者使用 binaryen-sys 生成 WebAssembly (不依賴 LLVM)
+# binaryen-sys = "0.12.0"
+
+# ... 其他依賴

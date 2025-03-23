@@ -1,4 +1,0 @@
-// 最簡單的測試文件
-x := 10;
-println("Hello, World!");
-println(x); 
