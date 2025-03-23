@@ -10,7 +10,7 @@ import (
 	"glux/internal/parser"
 	"glux/internal/semantics"
 
-	cli "github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v2"
 )
 
 func main() {
@@ -22,6 +22,11 @@ func main() {
 				Name:    "file",
 				Aliases: []string{"f"},
 				Usage:   "Glux source file to compile",
+			},
+			&cli.StringFlag{
+				Name:    "output",
+				Aliases: []string{"o"},
+				Usage:   "Output file name for the generated Go code (default: out.go)",
 			},
 		},
 		Action: func(c *cli.Context) error {
@@ -52,8 +57,18 @@ func main() {
 				return fmt.Errorf("code generation error: %v", err)
 			}
 
-			// 輸出生成的 Go 程式碼
-			fmt.Println(goCode)
+			// 預設輸出檔案名稱為 out.go，若有提供 -o 選項則使用該檔名
+			outputFile := c.String("output")
+			if outputFile == "" {
+				outputFile = "out.go"
+			}
+
+			// 寫入生成的 Go 程式碼至檔案
+			err = os.WriteFile(outputFile, []byte(goCode), 0644)
+			if err != nil {
+				return fmt.Errorf("failed to write to output file: %v", err)
+			}
+			fmt.Printf("Generated code saved to %s\n", outputFile)
 			return nil
 		},
 	}
