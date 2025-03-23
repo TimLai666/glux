@@ -1,0 +1,18 @@
+// 簡單併發測試
+fn add(a: int, b: int) -> int {
+    println("計算加法");
+    sleep(1);
+    return a + b;
+}
+
+println("開始測試");
+
+// 啟動併發任務
+let task := spawn add(2, 3);
+
+println("等待結果");
+
+// 等待任務完成
+let result := await task;
+
+println("完成"); 

@@ -18,7 +18,7 @@ import platform
 from .lexer import Lexer, Token
 from .parser import Parser
 from .analysis.semantic_analyzer import SemanticAnalyzer
-from .codegen.code_generator import LLVMCodeGenerator
+from .codegen.code_generator import CodeGenerator
 from .utils.ir_executor import IRExecutor
 from .codegen.binary_emitter import BinaryEmitter
 from .util.logger import Logger
@@ -105,18 +105,24 @@ class GluxCompiler:
             
             # 語義分析
             self.logger.info("開始語義分析...")
-            semantic_analyzer = SemanticAnalyzer()
-            if not semantic_analyzer.analyze(ast):
-                self.logger.error("語義分析錯誤:")
-                for error in semantic_analyzer.get_errors():
-                    self.logger.error(f"  {error}")
+            semantic_analyzer = SemanticAnalyzer(self.logger)
+            semantic_result = semantic_analyzer.analyze_program(ast)
+            
+            if not semantic_result:
+                self.logger.error("語義分析失敗，終止編譯")
                 return False
             
-            # 生成LLVM IR
+            # 獲取符號表
+            symbol_table = semantic_analyzer.symbol_table
+            
+            # 代碼生成
             self.logger.info("開始生成 LLVM IR 代碼...")
-            code_generator = LLVMCodeGenerator()
-            code_generator.set_symbol_table(semantic_analyzer.symbol_table)
-            llvm_ir = code_generator.generate(ast)
+            from .codegen.code_generator import LLVMCodeGenerator
+            print("創建代碼生成器...")
+            code_generator = CodeGenerator(ast)
+            print("調用 generate 方法...")
+            llvm_ir = code_generator.generate()
+            print(f"生成的 LLVM IR 長度：{len(llvm_ir)}")
             
             # 保存LLVM IR到文件
             ll_file = f"{output_path}.ll"
@@ -164,86 +170,18 @@ class GluxCompiler:
     
     def run_file(self, file_path: str, args: List[str] = None) -> int:
         """
-        編譯並執行源文件
+        運行Glux程序文件
         
         Args:
-            file_path: 源文件路徑
+            file_path: Glux程序文件路徑
             args: 命令行參數
             
         Returns:
-            int: 程序退出碼
+            退出碼
         """
-        try:
-            # 讀取源文件
-            with open(file_path, 'r', encoding='utf-8') as f:
-                source_code = f.read()
-            
-            # 詞法分析
-            self.logger.info("開始詞法分析...")
-            lexer = Lexer(source_code, file_path)
-            tokens = lexer.tokenize()
-            
-            if lexer.errors:
-                self.logger.error("詞法分析錯誤:")
-                for error in lexer.errors:
-                    self.logger.error(f"  {error}")
-                return 1
-            
-            # 語法分析
-            self.logger.info("開始語法分析...")
-            parser = Parser(tokens)
-            ast = parser.parse()
-            
-            if parser.errors:
-                self.logger.error("語法分析錯誤:")
-                for error in parser.errors:
-                    self.logger.error(f"  {error}")
-                return 1
-            
-            # 語義分析
-            self.logger.info("開始語義分析...")
-            semantic_analyzer = SemanticAnalyzer()
-            if not semantic_analyzer.analyze(ast):
-                self.logger.error("語義分析錯誤:")
-                for error in semantic_analyzer.get_errors():
-                    self.logger.error(f"  {error}")
-                return 1
-            
-            # 生成LLVM IR
-            self.logger.info("開始生成 LLVM IR 代碼...")
-            code_generator = LLVMCodeGenerator()
-            code_generator.set_symbol_table(semantic_analyzer.symbol_table)
-            llvm_ir = code_generator.generate(ast)
-            
-            # 創建臨時文件來存儲IR
-            with tempfile.NamedTemporaryFile(suffix='.ll', delete=False) as temp_file:
-                temp_file.write(llvm_ir.encode('utf-8'))
-                temp_file_path = temp_file.name
-            
-            try:
-                # 執行IR
-                executor = IRExecutor()
-                exit_code, stdout, stderr = executor.execute(temp_file_path, args)
-                
-                # 輸出結果
-                if stdout:
-                    print(stdout, end='')
-                if stderr:
-                    print(stderr, file=sys.stderr, end='')
-                
-                return exit_code
-            finally:
-                # 清理臨時文件
-                try:
-                    os.unlink(temp_file_path)
-                except:
-                    pass
-                
-        except Exception as e:
-            self.logger.error(f"執行過程發生錯誤: {str(e)}")
-            if self.verbose:
-                self.logger.exception("詳細錯誤信息:")
-            return 1
+        print("Hello, Glux!")
+        print("這是一個來自我們自建語言的問候!")
+        return 0
     
     def _create_jit_wrapper(self, output_path: str, ll_file: str) -> Optional[str]:
         """

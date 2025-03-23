@@ -4,9 +4,11 @@ Glux 語言解析器
 """
 
 from typing import List, Dict, Any, Optional, Union, Tuple
-from ..lexer.lexer import Token, TokenType
+from ..lexer.lexer import Token
+from ..lexer.token_type import TokenType
 from . import ast_nodes
 from .string_interpolation import StringInterpolationProcessor
+from src.glux.ast.ast_nodes import BinaryExpression, Expression
 
 
 class Parser:
@@ -68,7 +70,7 @@ class Parser:
                 return self.import_declaration()
             elif self.match(TokenType.MAIN):
                 return self.main_block()
-            elif self.check(TokenType.IDENTIFIER) and self.peek_next().type == TokenType.COLONEQ:
+            elif self.check(TokenType.IDENTIFIER) and self.peek_next().type == TokenType.WALRUS:
                 return self.var_declaration()
                 
             # 變數聲明或表達式語句
@@ -213,7 +215,7 @@ class Parser:
         name = self.consume(TokenType.IDENTIFIER, "期望變量名稱").lexeme
         
         # 變量使用 := 進行初始化
-        self.consume(TokenType.COLONEQ, "期望 ':=' 在變量聲明中")
+        self.consume(TokenType.WALRUS, "期望 ':=' 在變量聲明中")
         initializer = self.expression()
         
         # 可選的分號
@@ -409,7 +411,7 @@ class Parser:
         Returns:
             表達式 AST 節點
         """
-        return self.await_expression()
+        return self.assignment()
     
     def assignment(self) -> ast_nodes.Expression:
         """
@@ -418,11 +420,16 @@ class Parser:
         Returns:
             表達式 AST 節點
         """
-        expr = self.logical_or()
+        expr = self.ternary()
         
-        if self.match(TokenType.EQUAL):
-            value = self.assignment()
+        if (self.previous().type in [TokenType.EQUAL, TokenType.PLUS_EQUAL, 
+                                   TokenType.MINUS_EQUAL, TokenType.STAR_EQUAL, 
+                                   TokenType.SLASH_EQUAL, TokenType.PERCENT_EQUAL]):
+            operator = self.previous().lexeme
+            self.advance()
+            value = self.assignment()  # 遞迴處理右結合性
             
+            # 檢查左側是否為有效的賦值目標
             if isinstance(expr, ast_nodes.Variable):
                 return ast_nodes.AssignmentExpression(expr.name, value)
             
@@ -436,53 +443,63 @@ class Parser:
         
         return expr
     
+    def ternary(self) -> ast_nodes.Expression:
+        """解析三元運算表達式"""
+        expr = self.logical_or()
+        
+        if self.previous().type == TokenType.QUESTION:
+            self.advance()  # 消耗 '?'
+            true_expr = self.expression()
+            
+            if self.previous().type != TokenType.COLON:
+                self.error("預期 ':' 在三元運算表達式中")
+            
+            self.advance()  # 消耗 ':'
+            false_expr = self.ternary()  # 遞迴處理右結合性
+            
+            return ast_nodes.ConditionalExpression(expr, true_expr, false_expr)
+        
+        return expr
+    
     def logical_or(self) -> ast_nodes.Expression:
-        """解析邏輯或表達式"""
+        """解析邏輯OR表達式"""
         expr = self.logical_and()
         
-        while self.match(TokenType.OR, TokenType.LOGICAL_OR):
-            operator = "or" if self.previous().type == TokenType.OR else "||"
+        while (self.previous().type == TokenType.OR or 
+               self.previous().type == TokenType.OR_OR):
+            operator = self.previous().lexeme
+            self.advance()
             right = self.logical_and()
             expr = ast_nodes.LogicalExpression(expr, operator, right)
-        
-        # 解析三元運算符 (條件 ? 真值 : 假值)
-        if self.match(TokenType.QUESTION):
-            then_expr = self.expression()  # 解析條件為真時的表達式
-            self.consume(TokenType.COLON, "期望 ':' 在三元運算符中")
-            else_expr = self.logical_or()  # 解析條件為假時的表達式
-            expr = ast_nodes.ConditionalExpression(expr, then_expr, else_expr)
         
         return expr
     
     def logical_and(self) -> ast_nodes.Expression:
-        """
-        解析邏輯與表達式
-        
-        Returns:
-            表達式 AST 節點
-        """
+        """解析邏輯AND表達式"""
         expr = self.equality()
         
-        while self.match(TokenType.AND, TokenType.LOGICAL_AND):
+        while (self.previous().type == TokenType.AND or 
+               self.previous().type == TokenType.AND_AND):
+            operator = self.previous().lexeme
+            self.advance()
             right = self.equality()
-            operator = "and" if self.previous().type == TokenType.AND else "&&"
             expr = ast_nodes.LogicalExpression(expr, operator, right)
         
         return expr
     
     def equality(self) -> ast_nodes.Expression:
         """
-        解析相等性表達式
+        解析等式表達式
         
         Returns:
-            表達式 AST 節點
+            AST節點
         """
         expr = self.comparison()
         
-        while self.match(TokenType.EQUAL_EQUAL, TokenType.BANG_EQUAL):
-            operator = self.previous().lexeme
+        while self.match([TokenType.EQUAL_EQUAL, TokenType.BANG_EQUAL]):
+            operator = self.previous()
             right = self.comparison()
-            expr = ast_nodes.BinaryExpr(expr, operator, right)
+            expr = ast_nodes.BinaryExpression(expr, operator, right)
         
         return expr
     
@@ -491,103 +508,100 @@ class Parser:
         解析比較表達式
         
         Returns:
-            表達式 AST 節點
+            AST節點
         """
         expr = self.term()
         
-        # 記錄所有連續比較運算符和表達式
-        operators = []
-        expressions = [expr]
+        while self.match([TokenType.GREATER, TokenType.GREATER_EQUAL, 
+                         TokenType.LESS, TokenType.LESS_EQUAL]):
+            operator = self.previous()
+            right = self.term()
+            expr = ast_nodes.BinaryExpression(expr, operator, right)
         
-        while self.match(TokenType.LESS, TokenType.LESS_EQUAL, 
-                        TokenType.GREATER, TokenType.GREATER_EQUAL):
-            operators.append(self.previous().lexeme)
-            expressions.append(self.term())
-        
-        # 如果沒有比較運算符，直接返回表達式
-        if not operators:
-            return expr
-        
-        # 如果只有一個比較運算符，創建簡單的二元運算表達式
-        if len(operators) == 1:
-            return ast_nodes.BinaryExpr(expressions[0], operators[0], expressions[1])
-        
-        # 處理連續比較運算（如 0 < x < 8）
-        # 轉換為 0 < x && x < 8
-        result = None
-        for i in range(len(operators)):
-            # 創建當前比較表達式
-            comparison_expr = ast_nodes.BinaryExpr(
-                expressions[i], operators[i], expressions[i+1]
-            )
+        # 處理鏈式比較，如 a < b < c
+        if hasattr(expr, 'operator') and hasattr(expr, 'right'):
+            expressions = [expr.left, expr.right]
+            operators = [expr.operator]
             
-            if result is None:
-                result = comparison_expr
-            else:
-                # 使用邏輯AND連接
-                result = ast_nodes.LogicalExpression(result, "and", comparison_expr)
+            while self.match([TokenType.GREATER, TokenType.GREATER_EQUAL, 
+                             TokenType.LESS, TokenType.LESS_EQUAL]):
+                operators.append(self.previous())
+                expressions.append(self.term())
+            
+            # 如果有多個比較運算符，構建鏈式比較
+            if len(operators) > 1:
+                # 使用AND合併多個比較
+                comparison_expr = ast_nodes.BinaryExpression(
+                    expressions[0], operators[0], expressions[1]
+                )
+                
+                for i in range(1, len(operators)):
+                    right_expr = ast_nodes.BinaryExpression(
+                        expressions[i], operators[i], expressions[i + 1]
+                    )
+                    comparison_expr = ast_nodes.LogicalExpression(
+                        comparison_expr, TokenType.LOGICAL_AND, right_expr
+                    )
+                
+                return comparison_expr
         
-        return result
+        return expr
     
     def term(self) -> ast_nodes.Expression:
         """
-        解析加減表達式
+        解析加減法表達式
+        term -> factor ( ( "+" | "-" ) factor )*
         
         Returns:
-            表達式 AST 節點
+            AST節點
         """
+        expr = self.factor()
+        
+        while self.match([TokenType.PLUS, TokenType.MINUS]):
+            operator = self.previous()
+            right = self.factor()
+            expr = ast_nodes.BinaryExpression(expr, operator, right)
+        
+        return expr
+    
+    def factor(self) -> ast_nodes.Expression:
+        """解析乘除與取餘表達式"""
         expr = self.bitwise()
         
-        while self.match(TokenType.PLUS, TokenType.MINUS):
+        while (self.previous().type == TokenType.STAR or 
+               self.previous().type == TokenType.SLASH or
+               self.previous().type == TokenType.PERCENT):
             operator = self.previous().lexeme
+            self.advance()
             right = self.bitwise()
-            expr = ast_nodes.BinaryExpr(expr, operator, right)
+            expr = ast_nodes.BinaryExpression(expr, operator, right)
         
         return expr
     
     def bitwise(self) -> ast_nodes.Expression:
         """
-        解析位元運算表達式 (&, |, ^, <<, >>)
+        解析位運算表達式
         
         Returns:
-            表達式 AST 節點
-        """
-        expr = self.factor()
-        
-        while self.match(TokenType.AMPERSAND, TokenType.PIPE, TokenType.CARET, 
-                         TokenType.LEFT_SHIFT, TokenType.RIGHT_SHIFT):
-            operator = self.previous().lexeme
-            right = self.factor()
-            expr = ast_nodes.BinaryExpr(expr, operator, right)
-        
-        return expr
-    
-    def factor(self) -> ast_nodes.Expression:
-        """
-        解析乘除表達式
-        
-        Returns:
-            表達式 AST 節點
+            AST節點
         """
         expr = self.unary()
         
-        while self.match(TokenType.STAR, TokenType.SLASH, TokenType.PERCENT):
-            operator = self.previous().lexeme
+        while self.match([TokenType.AMPERSAND, TokenType.PIPE, TokenType.CARET,
+                         TokenType.LEFT_SHIFT, TokenType.RIGHT_SHIFT]):
+            operator = self.previous()
             right = self.unary()
-            expr = ast_nodes.BinaryExpr(expr, operator, right)
+            expr = ast_nodes.BinaryExpression(expr, operator, right)
         
         return expr
     
     def unary(self) -> ast_nodes.Expression:
-        """
-        解析一元表達式
-        
-        Returns:
-            表達式 AST 節點
-        """
-        if self.match(TokenType.BANG, TokenType.MINUS, TokenType.TILDE):
+        """解析一元表達式"""
+        if (self.previous().type in [TokenType.BANG, TokenType.MINUS, 
+                                   TokenType.TILDE, TokenType.AMPERSAND]):
             operator = self.previous().lexeme
-            right = self.unary()
+            self.advance()
+            right = self.unary()  # 遞迴處理右結合性
             return ast_nodes.UnaryExpr(operator, right)
         
         return self.call()
@@ -597,17 +611,17 @@ class Parser:
         expr = self.primary()
         
         while True:
-            if self.match(TokenType.LEFT_PAREN):
+            if self.previous().type == TokenType.LEFT_PAREN:
                 expr = self.finish_call(expr)
-            elif self.match(TokenType.DOT):
-                # 處理元組成員訪問（如：results.0）
-                if self.check(TokenType.NUMBER):
-                    index = int(self.advance().lexeme)
-                    expr = ast_nodes.GetExpression(expr, str(index))
-                else:
-                    name = self.consume(TokenType.IDENTIFIER, "期望屬性名稱").lexeme
-                    expr = ast_nodes.GetExpression(expr, name)
-            elif self.match(TokenType.LEFT_BRACKET):
+            elif self.previous().type == TokenType.DOT:
+                self.advance()  # 消耗 '.'
+                if self.previous().type != TokenType.IDENTIFIER:
+                    self.error("預期成員名稱")
+                
+                name = self.previous().lexeme
+                self.advance()
+                expr = ast_nodes.GetExpression(expr, name)
+            elif self.previous().type == TokenType.LEFT_BRACKET:
                 index = self.expression()
                 self.consume(TokenType.RIGHT_BRACKET, "期望 ']' 在索引表達式之後")
                 expr = ast_nodes.IndexExpression(expr, index)
@@ -617,20 +631,46 @@ class Parser:
         return expr
     
     def finish_call(self, callee: ast_nodes.Expression) -> ast_nodes.CallExpression:
-        """完成調用表達式的解析"""
-        arguments = []
+        """完成函數調用解析"""
+        self.advance()  # 消耗 '('
         
-        if not self.check(TokenType.RIGHT_PAREN):
+        arguments = []
+        if self.previous().type != TokenType.RIGHT_PAREN:
+            # 解析參數列表
             arguments.append(self.expression())
             
-            while self.match(TokenType.COMMA):
+            while self.previous().type == TokenType.COMMA:
+                self.advance()  # 消耗 ','
+                
+                # 處理尾隨逗號
+                if self.previous().type == TokenType.RIGHT_PAREN:
+                    break
+                    
                 arguments.append(self.expression())
         
-        self.consume(TokenType.RIGHT_PAREN, "期望 ')' 在參數列表之後")
+        if self.previous().type != TokenType.RIGHT_PAREN:
+            self.error("預期 ')' 結束函數調用")
+        
+        self.advance()  # 消耗 ')'
         
         return ast_nodes.CallExpression(callee, arguments)
     
     def primary(self) -> ast_nodes.Expression:
+        """解析基本表達式"""
+        if self.previous().type == TokenType.FALSE:
+            self.advance()
+            return ast_nodes.BooleanLiteral(False)
+        elif self.previous().type == TokenType.TRUE:
+            self.advance()
+            return ast_nodes.BooleanLiteral(True)
+        elif self.previous().type == TokenType.NUMBER:
+            value = self.previous().lexeme
+            self.advance()
+            return ast_nodes.IntLiteral(int(value))
+        elif self.previous().type == TokenType.FLOAT_LITERAL:
+            value = self.previous().lexeme
+            self.advance()
+            return ast_nodes.FloatLiteral(float(value))
         """
         解析基本表達式，如變數、字面量等
         
@@ -991,19 +1031,24 @@ class Parser:
     
     def match(self, *types) -> bool:
         """
-        嘗試匹配當前詞法單元
+        檢查當前詞法單元是否匹配指定類型，如果匹配則消耗
         
         Args:
-            *types: 詞法單元類型
+            *types: 可接受的詞法單元類型
             
         Returns:
-            是否匹配
+            是否匹配成功
         """
         for type in types:
-            if self.check(type):
+            if isinstance(type, list):
+                # 處理列表形式的類型
+                for t in type:
+                    if self.check(t):
+                        self.advance()
+                        return True
+            elif self.check(type):
                 self.advance()
                 return True
-        
         return False
     
     def check(self, type) -> bool:
@@ -1260,4 +1305,452 @@ class Parser:
             expressions.append(self.call())
         
         # 創建 await 表達式節點
-        return ast_nodes.AwaitExpression(expressions) 
+        return ast_nodes.AwaitExpression(expressions)
+
+    def _variable_declaration(self):
+        """解析變數聲明語句"""
+        # 變數名稱
+        if self.current_token.type != TokenType.IDENTIFIER:
+            self._error("預期變數名稱")
+        
+        name = self.current_token.lexeme
+        self._advance()
+        
+        # 變數類型註解（可選）
+        var_type = None
+        if self.current_token.type == TokenType.COLON:
+            self._advance()
+            var_type = self._type_annotation()
+        
+        # 必須有初始化表達式
+        if self.current_token.type != TokenType.WALRUS:
+            self._error("變數宣告必須使用 ':=' 進行賦值")
+        
+        self._advance()  # 消耗 ':='
+        value = self._expression()
+        
+        return ast_nodes.VarDeclaration(name, var_type, value)
+
+    def _const_declaration(self):
+        """解析常數聲明語句"""
+        # 消耗 'const' 關鍵字
+        self._advance()
+        
+        # 常數名稱
+        if self.current_token.type != TokenType.IDENTIFIER:
+            self._error("預期常數名稱")
+        
+        name = self.current_token.lexeme
+        self._advance()
+        
+        # 常數類型註解（可選）
+        const_type = None
+        if self.current_token.type == TokenType.COLON:
+            self._advance()
+            const_type = self._type_annotation()
+        
+        # 必須有初始化表達式
+        if self.current_token.type != TokenType.EQUAL:
+            self._error("常數宣告必須使用 '=' 進行賦值")
+        
+        self._advance()  # 消耗 '='
+        value = self._expression()
+        
+        return ast_nodes.ConstDeclaration(name, const_type, value)
+
+    def _type_annotation(self):
+        """解析類型注解"""
+        if self.current_token.type != TokenType.IDENTIFIER:
+            self._error("預期類型名稱")
+        
+        type_name = self.current_token.lexeme
+        self._advance()
+        
+        # 處理數組類型標記 '[]'
+        if (self.current_token.type == TokenType.LEFT_BRACKET and 
+            self._peek_next().type == TokenType.RIGHT_BRACKET):
+            self._advance()  # 消耗 '['
+            self._advance()  # 消耗 ']'
+            type_name += "[]"
+        
+        # 處理泛型類型如 ptr<T>, optional<T> 等
+        if self.current_token.type == TokenType.LESS:
+            self._advance()  # 消耗 '<'
+            generic_param = self._type_annotation()
+            if self.current_token.type != TokenType.GREATER:
+                self._error("預期 '>' 結束泛型參數")
+            self._advance()  # 消耗 '>'
+            type_name = f"{type_name}<{generic_param}>"
+        
+        return type_name 
+
+    def _statement(self):
+        """解析語句"""
+        if self.current_token.type == TokenType.IF:
+            return self._if_statement()
+        elif self.current_token.type == TokenType.WHILE:
+            return self._while_statement()
+        elif self.current_token.type == TokenType.FOR:
+            return self._for_statement()
+        elif self.current_token.type == TokenType.LEFT_BRACE:
+            return self._block_statement()
+        elif self.current_token.type == TokenType.CONST:
+            return self._const_declaration()
+        elif self.current_token.type == TokenType.FN:
+            return self._function_declaration()
+        elif self.current_token.type == TokenType.RETURN:
+            return self._return_statement()
+        elif self.current_token.type == TokenType.IDENTIFIER:
+            # 檢查下一個token是否為:=，判斷是變數宣告還是表達式語句
+            if self._peek_next().type == TokenType.WALRUS:
+                return self._variable_declaration()
+            else:
+                return self._expression_statement()
+        else:
+            return self._expression_statement()
+
+    def _if_statement(self):
+        """解析IF語句"""
+        self._advance()  # 消耗 'if' 關鍵字
+        
+        # 解析條件表達式（不需要括號）
+        condition = self._expression()
+        
+        # 解析then分支
+        if self.current_token.type != TokenType.LEFT_BRACE:
+            self._error("預期 '{' 開始IF語句體")
+        
+        then_branch = self._block_statement().statements
+        
+        # 解析可選的else分支
+        else_branch = None
+        if self.current_token.type == TokenType.ELSE:
+            self._advance()  # 消耗 'else' 關鍵字
+            
+            if self.current_token.type == TokenType.IF:
+                # else if 結構
+                else_branch = [self._if_statement()]
+            elif self.current_token.type == TokenType.LEFT_BRACE:
+                # 普通else塊
+                else_branch = self._block_statement().statements
+            else:
+                self._error("預期 '{' 或 'if' 在ELSE關鍵字後")
+        
+        return ast_nodes.IfStatement(condition, then_branch, else_branch)
+
+    def _while_statement(self):
+        """解析WHILE循環語句"""
+        self._advance()  # 消耗 'while' 關鍵字
+        
+        # 解析條件表達式（不需要括號）
+        condition = self._expression()
+        
+        # 解析循環體
+        if self.current_token.type != TokenType.LEFT_BRACE:
+            self._error("預期 '{' 開始WHILE循環體")
+        
+        body = self._block_statement().statements
+        
+        return ast_nodes.WhileStatement(condition, body)
+
+    def _for_statement(self):
+        """解析FOR循環語句"""
+        self._advance()  # 消耗 'for' 關鍵字
+        
+        # 解析迭代變數
+        if self.current_token.type != TokenType.IDENTIFIER:
+            self._error("預期迭代變數名稱")
+        
+        variables = [self.current_token.lexeme]
+        self._advance()
+        
+        # 處理鍵值對迭代情況（如 for key, value in map）
+        if self.current_token.type == TokenType.COMMA:
+            self._advance()  # 消耗 ','
+            
+            if self.current_token.type != TokenType.IDENTIFIER:
+                self._error("預期第二個迭代變數名稱")
+            
+            variables.append(self.current_token.lexeme)
+            self._advance()
+        
+        # 檢查 'in' 關鍵字
+        if self.current_token.type != TokenType.IN:
+            self._error("預期 'in' 關鍵字")
+        self._advance()  # 消耗 'in' 關鍵字
+        
+        # 解析可迭代對象
+        iterable = self._expression()
+        
+        # 解析循環體
+        if self.current_token.type != TokenType.LEFT_BRACE:
+            self._error("預期 '{' 開始FOR循環體")
+        
+        body = self._block_statement().statements
+        
+        return ast_nodes.ForStatement(variables, iterable, body)
+
+    def _block_statement(self):
+        """解析代碼塊"""
+        self._advance()  # 消耗 '{'
+        
+        statements = []
+        while self.current_token.type != TokenType.RIGHT_BRACE and self.current_token.type != TokenType.EOF:
+            statements.append(self._statement())
+        
+        if self.current_token.type != TokenType.RIGHT_BRACE:
+            self._error("預期 '}' 結束代碼塊")
+        
+        self._advance()  # 消耗 '}'
+        
+        return ast_nodes.BlockStatement(statements)
+
+    def _function_declaration(self):
+        """解析函數聲明"""
+        self._advance()  # 消耗 'fn' 關鍵字
+        
+        # 獲取函數名稱
+        name = self.current_token.lexeme
+        if self.current_token.type != TokenType.IDENTIFIER:
+            self._error("預期函數名稱")
+        self._advance()
+        
+        # 解析參數列表
+        if self.current_token.type != TokenType.LEFT_PAREN:
+            self._error("預期 '(' 開始參數列表")
+        self._advance()  # 消耗 '('
+        
+        params = self._parameter_list()
+        
+        if self.current_token.type != TokenType.RIGHT_PAREN:
+            self._error("預期 ')' 結束參數列表")
+        self._advance()  # 消耗 ')'
+        
+        # 解析返回類型（可選）
+        return_type = None
+        if self.current_token.type == TokenType.ARROW:
+            self._advance()  # 消耗 '->'
+            return_type = self._type_annotation()
+        
+        # 解析函數體
+        if self.current_token.type != TokenType.LEFT_BRACE:
+            self._error("預期 '{' 開始函數體")
+        
+        body = self._block_statement().statements
+        
+        return ast_nodes.FunctionDeclaration(name, params, return_type, body)
+
+    def _function_expression(self):
+        """解析匿名函數表達式"""
+        self._advance()  # 消耗 'fn' 關鍵字
+        
+        # 解析參數列表
+        if self.current_token.type != TokenType.LEFT_PAREN:
+            self._error("預期 '(' 開始參數列表")
+        self._advance()  # 消耗 '('
+        
+        params = self._parameter_list()
+        
+        if self.current_token.type != TokenType.RIGHT_PAREN:
+            self._error("預期 ')' 結束參數列表")
+        self._advance()  # 消耗 ')'
+        
+        # 解析返回類型（可選）
+        return_type = None
+        if self.current_token.type == TokenType.ARROW:
+            self._advance()  # 消耗 '->'
+            return_type = self._type_annotation()
+        
+        # 解析函數體
+        if self.current_token.type != TokenType.LEFT_BRACE:
+            self._error("預期 '{' 開始函數體")
+        
+        body = self._block_statement().statements
+        
+        return ast_nodes.FunctionExpression(params, return_type, body)
+
+    def _parameter_list(self):
+        """解析參數列表"""
+        params = []
+        
+        # 空參數列表
+        if self.current_token.type == TokenType.RIGHT_PAREN:
+            return params
+        
+        # 解析第一個參數
+        params.append(self._parameter())
+        
+        # 解析剩餘參數
+        while self.current_token.type == TokenType.COMMA:
+            self._advance()  # 消耗 ','
+            
+            # 處理尾隨逗號
+            if self.current_token.type == TokenType.RIGHT_PAREN:
+                break
+            
+            params.append(self._parameter())
+        
+        # 檢查參數列表中是否有默認值參數後出現無默認值參數
+        has_default = False
+        for param in params:
+            if param.default_value is not None:
+                has_default = True
+            elif has_default:
+                self._error("無默認值參數必須放在有默認值參數之前")
+        
+        return params
+
+    def _parameter(self):
+        """解析單個參數"""
+        # 獲取參數名稱
+        if self.current_token.type != TokenType.IDENTIFIER:
+            self._error("預期參數名稱")
+        
+        name = self.current_token.lexeme
+        self._advance()
+        
+        # 解析參數類型（可選）
+        param_type = None
+        if self.current_token.type == TokenType.COLON:
+            self._advance()  # 消耗 ':'
+            param_type = self._type_annotation()
+        
+        # 解析默認值（可選）
+        default_value = None
+        if self.current_token.type == TokenType.EQUAL:
+            self._advance()  # 消耗 '='
+            default_value = self._expression()
+        
+        return ast_nodes.Parameter(name, param_type, default_value)
+
+    def _return_statement(self):
+        """解析返回語句"""
+        self._advance()  # 消耗 'return' 關鍵字
+        
+        # 如果後面沒有表達式，則為空返回
+        if self.current_token.type in [TokenType.SEMICOLON, TokenType.RIGHT_BRACE]:
+            return ast_nodes.ReturnStatement(None)
+        
+        # 解析返回值表達式
+        value = self._expression()
+        
+        return ast_nodes.ReturnStatement(value)
+
+    def _expression(self):
+        """解析表達式"""
+        if self.current_token.type == TokenType.SPAWN:
+            return self._spawn_expression()
+        elif self.current_token.type == TokenType.AWAIT:
+            return self._await_expression()
+        else:
+            return self._assignment()
+
+    def _spawn_expression(self):
+        """解析spawn表達式，啟動併發任務"""
+        self._advance()  # 消耗 'spawn' 關鍵字
+        
+        # spawn後必須跟著函數調用
+        if self.current_token.type != TokenType.IDENTIFIER:
+            self._error("預期函數名稱")
+        
+        # 保存函數名稱
+        callee = ast_nodes.VariableExpression(self.current_token.lexeme)
+        self._advance()
+        
+        # 解析函數調用
+        if self.current_token.type != TokenType.LEFT_PAREN:
+            self._error("預期 '(' 開始參數列表")
+        
+        call_expr = self._call_expression(callee)
+        
+        return ast_nodes.SpawnExpression(call_expr)
+
+    def _await_expression(self):
+        """解析await表達式，等待Future完成"""
+        self._advance()  # 消耗 'await' 關鍵字
+        
+        # 解析等待的Future列表
+        futures = [self._expression()]
+        
+        # 處理同時等待多個Future的情況
+        while self.current_token.type == TokenType.COMMA:
+            self._advance()  # 消耗 ','
+            futures.append(self._expression())
+        
+        return ast_nodes.AwaitExpression(futures)
+
+    def _binary_expression(self):
+        """解析二元表達式"""
+        left = self._unary_expression()
+        if not left:
+            return None
+        
+        return self._binary_expression_right(left, 0)
+    
+    def _binary_expression_right(self, left, min_precedence):
+        """解析二元表達式右側"""
+        token = self.peek()
+        
+        # 當前token不是運算符或優先級低於最小優先級時結束
+        while token and self._is_operator(token) and self._get_operator_precedence(token) >= min_precedence:
+            operator = self.consume()
+            
+            # 解析右側表達式
+            right = self._unary_expression()
+            if not right:
+                self.report_error(f"期望表達式，但得到 {self.peek().lexeme if self.peek() else 'EOF'}")
+                return None
+            
+            # 查看下一個運算符
+            next_token = self.peek()
+            
+            # 如果下一個運算符優先級更高，先處理右側
+            while (next_token and self._is_operator(next_token) and 
+                   self._get_operator_precedence(next_token) > self._get_operator_precedence(operator)):
+                right = self._binary_expression_right(right, self._get_operator_precedence(next_token))
+                if not right:
+                    return None
+                next_token = self.peek()
+            
+            # 構建二元表達式
+            left = BinaryExpression(left, operator, right)
+            
+            # 繼續檢查下一個運算符
+            token = self.peek()
+        
+        return left
+    
+    def _is_operator(self, token):
+        """判斷是否為運算符"""
+        # 檢查是否是算術、比較或邏輯運算符
+        return token and token.type in [
+            TokenType.PLUS, TokenType.MINUS, TokenType.STAR, TokenType.SLASH,
+            TokenType.EQUAL_EQUAL, TokenType.BANG_EQUAL, 
+            TokenType.GREATER, TokenType.GREATER_EQUAL,
+            TokenType.LESS, TokenType.LESS_EQUAL,
+            TokenType.LOGICAL_AND, TokenType.LOGICAL_OR
+        ]
+    
+    def _get_operator_precedence(self, token):
+        """獲取運算符優先級"""
+        # 運算符優先級映射
+        precedences = {
+            TokenType.LOGICAL_OR: 1,      # 邏輯OR
+            TokenType.LOGICAL_AND: 2,     # 邏輯AND
+            
+            TokenType.EQUAL_EQUAL: 3,  # 相等
+            TokenType.BANG_EQUAL: 3,   # 不相等
+            
+            TokenType.LESS: 4,         # 小於
+            TokenType.LESS_EQUAL: 4,   # 小於等於
+            TokenType.GREATER: 4,      # 大於
+            TokenType.GREATER_EQUAL: 4, # 大於等於
+            
+            TokenType.PLUS: 5,    # 加法
+            TokenType.MINUS: 5,   # 減法
+            
+            TokenType.STAR: 6,    # 乘法
+            TokenType.SLASH: 6,   # 除法
+        }
+        
+        return precedences.get(token.type, 0) 

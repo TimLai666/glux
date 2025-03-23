@@ -1,0 +1,3 @@
+// 非常簡單的模板測試
+message := "World";
+println(`Hello, ${message}!`); 

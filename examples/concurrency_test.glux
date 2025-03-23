@@ -1,0 +1,49 @@
+// 併發程序測試
+// 測試基本的併發功能 - spawn和await
+
+main {
+    // 定義一個簡單的函數用於測試併發
+    fn calculate(a: int, b: int) -> int {
+        println("計算中...");
+        // 模擬計算耗時
+        sleep(1);
+        return a + b;
+    }
+
+    fn process_data(data: int) -> int {
+        println("處理數據");
+        sleep(2);
+        return data * 10;
+    }
+
+    // 主程序
+    println("開始併發測試");
+    
+    // 啟動異步任務
+    println("啟動任務1");
+    let future1 := spawn calculate(1, 2);
+    
+    println("啟動任務2");
+    let future2 := spawn calculate(3, 4);
+    
+    println("啟動任務3");
+    let future3 := spawn process_data(5);
+    
+    // 做一些其他工作
+    println("主線程繼續執行其他工作...");
+    sleep(1);
+    
+    // 等待任務完成
+    println("等待任務完成...");
+    
+    // 單個await
+    let result1 := await future1;
+    println("任務1完成");
+    
+    // 多值await
+    // let results := await future2, future3;
+    // println("任務2完成");
+    // println("任務3完成");
+    
+    println("所有任務完成");
+} 

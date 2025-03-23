@@ -25,49 +25,62 @@ class IRExecutor:
     負責執行和管理 LLVM IR
     """
     
-    def __init__(self, binary_file: str = None):
+    def __init__(self, verbose=False):
         """
         初始化執行器
         
         Args:
-            binary_file: 可選的二進制文件路徑
+            verbose: 是否啟用詳細日誌
         """
-        self.binary_file = binary_file
-        self.logger = logging.getLogger("IRExecutor")
+        self.verbose = verbose
+        self.logger = logging.getLogger(__name__)
         self.errors = []
         
-        # 嘗試導入llvmlite以支持JIT編譯
-        self.llvm = None
-        try:
-            # 初始化LLVM
-            self.llvm = llvm
-            llvm.initialize()
-            llvm.initialize_native_target()
-            llvm.initialize_native_asmprinter()
-            self.logger.info("成功初始化LLVM綁定")
-        except Exception as e:
-            self.logger.warning(f"初始化LLVM時發生錯誤: {str(e)}")
-            self.llvm = None
+        # 初始化 LLVM
+        llvm.initialize()
+        llvm.initialize_native_target()
+        llvm.initialize_native_asmprinter()
+        self.logger.info("成功初始化LLVM綁定")
     
-    def execute(self, file_or_ir: str, args: List[str] = None, is_ir: bool = False) -> Tuple[int, str, str]:
+    def execute(self, ir_content):
         """
-        執行LLVM IR或二進制文件
+        執行 LLVM IR 代碼
         
         Args:
-            file_or_ir: LLVM IR字符串或文件路徑
-            args: 命令行參數
-            is_ir: 指示傳入的是LLVM IR字符串還是文件路徑
+            ir_content: LLVM IR 字符串
         
         Returns:
-            退出碼, 標準輸出, 標準錯誤
+            退出碼
         """
-        args = args or []
+        self.logger.info("開始執行LLVM IR...")
+        self.logger.info("成功讀取LLVM IR內容")
         
-        # 判斷是否為LLVM IR
-        if is_ir or (not is_ir and self._is_llvm_ir(file_or_ir)):
-            return self._execute_llvm_ir(file_or_ir, args, is_ir)
-        else:
-            return self._execute_binary(file_or_ir, args)
+        # 解析 IR
+        self.logger.info("開始解析LLVM IR...")
+        try:
+            # 嘗試解析 IR
+            ir_module = llvm.parse_assembly(ir_content)
+            ir_module.verify()
+            
+            # 創建執行引擎
+            target_machine = llvm.Target.from_default_triple().create_target_machine()
+            engine = llvm.create_mcjit_compiler(ir_module, target_machine)
+            
+            # 獲取 main 函數
+            main_func_ptr = engine.get_function_address("main")
+            
+            # 將函數指針轉換為 Python 函數
+            cfunc = ctypes.CFUNCTYPE(ctypes.c_int)(main_func_ptr)
+            
+            # 執行 main 函數
+            result = cfunc()
+            print(f"程序執行成功，返回值: {result}")
+            return 0
+            
+        except Exception as e:
+            self.logger.error(f"執行LLVM IR時發生錯誤: {str(e)}")
+            print(f"執行LLVM IR時發生錯誤: {str(e)}")
+            return 1
     
     def _is_llvm_ir(self, file_path: str) -> bool:
         """
@@ -94,7 +107,7 @@ class IRExecutor:
     
     def _execute_llvm_ir(self, ir_or_file: str, args: List[str] = None, is_ir_content: bool = False) -> Tuple[int, str, str]:
         """
-        使用JIT執行LLVM IR
+        執行LLVM IR代碼
         
         Args:
             ir_or_file: LLVM IR內容或文件路徑
@@ -105,9 +118,11 @@ class IRExecutor:
             退出碼, 標準輸出, 標準錯誤
         """
         # 檢查是否支持JIT
-        if not self.llvm:
+        if not llvm:
             self.logger.error("未安裝llvmlite，無法使用JIT執行")
             return 1, "", "未安裝llvmlite，無法使用JIT執行"
+        
+        self.logger.info("開始執行LLVM IR...")
         
         try:
             # 獲取IR內容
@@ -115,22 +130,30 @@ class IRExecutor:
             if not ir_content:
                 return 1, "", "無法讀取LLVM IR內容"
             
+            self.logger.info("成功讀取LLVM IR內容")
+            
             # 修復字符串長度不匹配問題
             ir_content = self._fix_string_length_mismatch(ir_content)
             
+            self.logger.info("開始解析LLVM IR...")
+            
             # 使用llvmlite解析IR
-            ir_module = self.llvm.parse_assembly(ir_content)
+            ir_module = llvm.parse_assembly(ir_content)
             ir_module.verify()
             
+            self.logger.info("成功解析LLVM IR，正在創建執行引擎...")
+            
             # 創建執行引擎
-            target_machine = self.llvm.Target.from_default_triple().create_target_machine()
-            engine = self.llvm.create_mcjit_compiler(ir_module, target_machine)
+            target_machine = llvm.Target.from_default_triple().create_target_machine()
+            engine = llvm.create_mcjit_compiler(ir_module, target_machine)
+            
+            self.logger.info("成功創建執行引擎，準備執行LLVM IR...")
             
             # 嘗試添加全局映射以支持外部函數
             try:
                 # 在macOS上，直接使用None或空字符串可能會失敗
                 # 我們跳過這一步，因為大多數Glux程序不需要直接調用外部函數
-                # 註釋掉這一行： self.llvm.load_library_permanently('')
+                # 註釋掉這一行： llvm.load_library_permanently('')
                 pass
             except Exception as e:
                 self.logger.warning(f"載入進程符號失敗，但繼續執行: {str(e)}")
@@ -139,15 +162,19 @@ class IRExecutor:
             old_environ = os.environ.copy()
             try:
                 # 將參數設置為環境變量
-                os.environ["GLUX_ARG_COUNT"] = str(len(args))
-                for i, arg in enumerate(args):
+                os.environ["GLUX_ARG_COUNT"] = str(len(args or []))
+                for i, arg in enumerate(args or []):
                     os.environ[f"GLUX_ARG_{i}"] = arg
                 
                 # 重定向標準輸出和錯誤
+                self.logger.info("準備重定向標準輸出和標準錯誤...")
+                
                 with tempfile.NamedTemporaryFile(delete=False, mode='w+', encoding='utf-8') as stdout_file, \
                      tempfile.NamedTemporaryFile(delete=False, mode='w+', encoding='utf-8') as stderr_file:
                     
                     stdout_path, stderr_path = stdout_file.name, stderr_file.name
+                    self.logger.info(f"標准輸出重定向到: {stdout_path}")
+                    self.logger.info(f"標准錯誤重定向到: {stderr_path}")
                     
                     # 保存原始文件描述符
                     old_stdout_fd = os.dup(1)
@@ -159,30 +186,43 @@ class IRExecutor:
                     
                     try:
                         # 獲取主函數地址並執行
+                        self.logger.info("獲取main函數地址並執行...")
                         main_addr = engine.get_function_address("main")
                         import ctypes
                         cfunc = ctypes.CFUNCTYPE(ctypes.c_int)(main_addr)
                         exit_code = cfunc()
+                        self.logger.info(f"執行完成，退出碼：{exit_code}")
                     finally:
                         # 恢復標準輸出和錯誤
                         os.dup2(old_stdout_fd, 1)
                         os.dup2(old_stderr_fd, 2)
                         os.close(old_stdout_fd)
                         os.close(old_stderr_fd)
+                        self.logger.info("已恢復標準輸出和標準錯誤")
                 
                 # 讀取捕獲的輸出
+                self.logger.info("讀取捕獲的輸出...")
                 with open(stdout_path, 'r', encoding='utf-8') as f:
                     stdout = f.read()
+                    self.logger.info(f"標準輸出內容長度: {len(stdout)} 字節")
+                    self.logger.info(f"標準輸出內容: {stdout!r}")
+                
                 with open(stderr_path, 'r', encoding='utf-8') as f:
                     stderr = f.read()
+                    self.logger.info(f"標準錯誤內容長度: {len(stderr)} 字節")
+                    if stderr:
+                        self.logger.info(f"標準錯誤內容: {stderr!r}")
                 
                 # 清理臨時文件
                 try:
                     os.unlink(stdout_path)
                     os.unlink(stderr_path)
+                    self.logger.info("已清理臨時文件")
                 except:
+                    self.logger.warning("清理臨時文件失敗")
                     pass
                 
+                self.logger.info("LLVM IR執行完成")
                 return exit_code, stdout, stderr
             finally:
                 # 恢復原始環境變量

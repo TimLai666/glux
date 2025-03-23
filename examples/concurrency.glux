@@ -1,0 +1,44 @@
+// Glux併發程序示例
+// 展示spawn和await的用法
+
+// 模擬計算斐波那契數
+fn fib(n: int) -> int {
+    if n <= 1 {
+        return n;
+    }
+    return fib(n-1) + fib(n-2);
+}
+
+// 模擬耗時計算
+fn compute_task(id: int, value: int) -> int {
+    println("任務 #" + id + " 開始計算...");
+    let result = fib(value);
+    println("任務 #" + id + " 完成計算: " + result);
+    return result;
+}
+
+fn main() {
+    println("併發計算示例");
+    
+    // 啟動三個並發任務
+    let f1 = spawn compute_task(1, 20);
+    let f2 = spawn compute_task(2, 21);
+    let f3 = spawn compute_task(3, 19);
+    
+    println("所有任務已啟動，主線程繼續執行");
+    
+    // 等待所有任務完成
+    let results = await [f1, f2, f3];
+    
+    // 輸出結果總和
+    let sum = results[0] + results[1] + results[2];
+    println("計算結果總和: " + sum);
+    
+    // 單獨等待任務
+    let f4 = spawn compute_task(4, 22);
+    println("等待任務 #4 完成...");
+    let result4 = await f4;
+    println("任務 #4 結果: " + result4);
+    
+    println("所有任務已完成");
+} 

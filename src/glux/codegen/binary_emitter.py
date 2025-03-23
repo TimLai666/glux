@@ -170,7 +170,7 @@ class BinaryEmitter:
             # 生成 LLVM IR
             from ..codegen.code_generator import LLVMCodeGenerator
             self.logger.info("開始生成 LLVM IR...")
-            code_generator = LLVMCodeGenerator()
+            code_generator = LLVMCodeGenerator(options=None)
             llvm_ir = code_generator.generate(self.ast)
             
             # 保存 LLVM IR 到臨時文件

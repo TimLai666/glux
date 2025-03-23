@@ -521,6 +521,73 @@ class SymbolTable:
         """
         return self.current_function_return_type
     
+    def register_builtin(self, name: str, kind_str: str, return_type: str = 'void'):
+        """
+        註冊內建函數或類型
+        
+        Args:
+            name: 內建函數或類型名稱
+            kind_str: 符號類型（'function', 'type'等）
+            return_type: 如果是函數，函數的返回類型
+            
+        Returns:
+            是否成功註冊
+        """
+        from ..type_system.type_defs import GluxType, TypeKind
+        
+        # 確定符號種類
+        kind = SymbolKind.UNKNOWN
+        if kind_str.lower() == 'function':
+            kind = SymbolKind.FUNCTION
+        elif kind_str.lower() == 'type':
+            kind = SymbolKind.TYPE
+        elif kind_str.lower() == 'variable':
+            kind = SymbolKind.VARIABLE
+        elif kind_str.lower() == 'const':
+            kind = SymbolKind.CONST
+            
+        # 處理返回類型
+        type_info = None
+        if return_type == 'void':
+            type_info = GluxType('void', TypeKind.VOID)
+        elif return_type == 'int':
+            type_info = GluxType('i32', TypeKind.INT)
+        elif return_type == 'float':
+            type_info = GluxType('double', TypeKind.FLOAT)
+        elif return_type == 'string':
+            type_info = GluxType('string', TypeKind.STRING)
+        elif return_type == 'bool':
+            type_info = GluxType('bool', TypeKind.BOOL)
+            
+        # 創建元數據
+        metadata = {
+            'is_builtin': True,
+            'description': f'內建{kind_str} {name}'
+        }
+            
+        # 在全局作用域中定義符號
+        symbol = Symbol(
+            name=name,
+            kind=kind,
+            type_info=type_info,
+            scope_level=0,  # 全局作用域
+            is_mutable=False,  # 內建函數不可變
+            is_initialized=True,  # 內建函數已初始化
+            is_used=False,
+            metadata=metadata
+        )
+        
+        # 直接在全局作用域添加符號
+        existing_symbol = self.global_scope.resolve_local(name, include_parent=False)
+        if existing_symbol:
+            # 如果已存在，更新它
+            self.global_scope.symbols[name] = symbol
+        else:
+            # 否則添加新符號
+            self.global_scope.symbols[name] = symbol
+            
+        return True
+    
     def _check_unused_variables(self):
         """檢查未使用的變量，添加警告"""
         for name, symbol in self.current_scope.symbols.items():
@@ -582,4 +649,16 @@ class SymbolTable:
         self.imports.append({
             'module_path': module_path,
             'items': items or []
-        }) 
+        })
+    
+    def exists(self, name: str) -> bool:
+        """
+        檢查符號是否存在
+        
+        Args:
+            name: 符號名稱
+            
+        Returns:
+            符號是否存在
+        """
+        return self.resolve(name) is not None 

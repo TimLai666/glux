@@ -1,0 +1,21 @@
+// 字符串插值測試
+
+// 宣告變量
+name := "小明"
+age := 25
+
+// 使用模板字符串進行插值
+println(`您好，${name}！您今年 ${age} 歲。`)
+
+// 另一個插值示例
+count := 10
+println(`計數：${count}`)
+
+main {
+    // 在 main 區塊中的插值
+    local_value := 42
+    println(`main 區塊中的值：${local_value}`)
+    
+    // 使用全局變量
+    println(`全局變量值：${name}, ${age}`)
+} 

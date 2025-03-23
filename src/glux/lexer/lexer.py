@@ -6,127 +6,7 @@ Glux 語言的詞法分析器
 import re
 from enum import Enum, auto
 from typing import List, Dict, Any, Optional, Union, Tuple, Callable
-
-
-class TokenType(Enum):
-    """詞法單元類型"""
-    # 關鍵字
-    AND = auto()
-    ANY = auto()
-    BOOL = auto()
-    CONST = auto()
-    COPY = auto()
-    ELSE = auto()
-    ENUM = auto()     # enum 關鍵字
-    ERROR = auto()
-    EXTENDS = auto()
-    FALSE = auto()
-    FLOAT = auto()
-    FN = auto()
-    FOR = auto()
-    FROM = auto()     # from 關鍵字
-    IF = auto()
-    IMPORT = auto()   # import 關鍵字
-    IN = auto()
-    INT = auto()
-    INTERFACE = auto()
-    IS_ERROR = auto()
-    LEN = auto()
-    LIST = auto()
-    MAIN = auto()     # main 關鍵字
-    MAP = auto()
-    NOT = auto()
-    OPTIONAL = auto()
-    OR = auto()
-    PTR = auto()
-    PRINT = auto()
-    PRINTLN = auto()
-    RETURN = auto()
-    SLEEP = auto()
-    SPAWN = auto()
-    STRING = auto()
-    STRUCT = auto()
-    TRUE = auto()
-    TUPLE = auto()
-    UNION = auto()
-    UNSAFE = auto()
-    AWAIT = auto()
-    WHILE = auto()
-    OVERRIDE = auto()
-    NULL = auto()
-    VOID = auto()     # void 關鍵字
-    
-    # 標識符
-    IDENTIFIER = auto()
-    
-    # 字面量
-    NUMBER = auto()        # 整數字面量
-    FLOAT_LITERAL = auto() # 浮點數字面量
-    STRING_LITERAL = auto() # 字符串字面量
-    CHAR_LITERAL = auto()  # 字符字面量
-    TEMPLATE_STRING = auto() # 模板字符串（反引號）
-    
-    # 運算符
-    PLUS = auto()          # +
-    MINUS = auto()         # -
-    STAR = auto()          # *
-    SLASH = auto()         # /
-    PERCENT = auto()       # %
-    
-    # 位運算符
-    AMPERSAND = auto()     # &
-    PIPE = auto()          # |
-    CARET = auto()         # ^
-    TILDE = auto()         # ~
-    LEFT_SHIFT = auto()    # <<
-    RIGHT_SHIFT = auto()   # >>
-    
-    # 比較運算符
-    EQUAL_EQUAL = auto()   # ==
-    BANG_EQUAL = auto()    # !=
-    LESS = auto()          # <
-    LESS_EQUAL = auto()    # <=
-    GREATER = auto()       # >
-    GREATER_EQUAL = auto() # >=
-    
-    # 邏輯運算符
-    LOGICAL_AND = auto()   # &&
-    LOGICAL_OR = auto()    # ||
-    BANG = auto()          # !
-    QUESTION = auto()      # ?
-    
-    # 賦值運算符
-    EQUAL = auto()         # =
-    PLUS_EQUAL = auto()    # +=
-    MINUS_EQUAL = auto()   # -=
-    STAR_EQUAL = auto()    # *=
-    SLASH_EQUAL = auto()   # /=
-    PERCENT_EQUAL = auto() # %=
-    AMPERSAND_EQUAL = auto() # &=
-    PIPE_EQUAL = auto()    # |=
-    CARET_EQUAL = auto()   # ^=
-    LEFT_SHIFT_EQUAL = auto() # <<=
-    RIGHT_SHIFT_EQUAL = auto() # >>=
-    COLONEQ = auto()       # :=
-    
-    # 分隔符
-    LEFT_PAREN = auto()    # (
-    RIGHT_PAREN = auto()   # )
-    LEFT_BRACE = auto()    # {
-    RIGHT_BRACE = auto()   # }
-    LEFT_BRACKET = auto()  # [
-    RIGHT_BRACKET = auto() # ]
-    COMMA = auto()         # ,
-    DOT = auto()           # .
-    DOT_DOT = auto()       # ..
-    COLON = auto()         # :
-    SEMICOLON = auto()     # ;
-    ARROW = auto()         # ->
-    
-    # 其他
-    EOF = auto()           # 文件結束
-    DOLLAR = auto()         # $
-    BACKSLASH = auto()      # \
+from .token_type import TokenType
 
 
 class Token:
@@ -163,7 +43,7 @@ class Token:
 class Lexer:
     """詞法分析器類"""
     
-    # 保留關鍵字映射
+    # 保留字列表
     KEYWORDS = {
         'and': TokenType.AND,
         'await': TokenType.AWAIT,
@@ -187,7 +67,7 @@ class Lexer:
         'true': TokenType.TRUE,
         'unsafe': TokenType.UNSAFE,
         'while': TokenType.WHILE,
-        'override': TokenType.OVERRIDE
+        'override': TokenType.OVERRIDE,
     }
     
     def __init__(self, source: str, file_name: str = "<stdin>"):
@@ -272,7 +152,7 @@ class Lexer:
                 self.add_token(TokenType.DOT)
         elif c == ":":
             if self.match("="):
-                self.add_token(TokenType.COLONEQ)
+                self.add_token(TokenType.WALRUS)
             else:
                 self.add_token(TokenType.COLON)
         elif c == ";" or c == "；":  # 支持中文分號
