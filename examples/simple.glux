@@ -1,0 +1,25 @@
+// 這是一個簡單的範例程序
+// 只使用基本功能，不包含複雜特性
+
+main {
+    // 基本變量聲明和賦值
+    message := "Hello, Glux!"
+    count := 5
+    
+    // 輸出消息
+    println(message)
+    
+    // 簡單的條件判斷
+    if count > 3 {
+        println("Count is greater than 3")
+    }
+    
+    // 簡單的循環
+    i := 0
+    while i < count {
+        println("Loop iteration")
+        i = i + 1
+    }
+    
+    println("Program completed")
+} 

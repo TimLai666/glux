@@ -1,1 +1,16 @@
-println("Hello, World!");
+// 這是一個簡單的 Hello World 範例程序
+// 包含字符串插值和主程序塊
+
+main {
+    name := "Glux"
+    age := 1
+    
+    // 使用字符串插值輸出問候語
+    println(`Hello, ${name}!`)
+    println(`這個語言現在有 ${age} 歲了!`)
+    
+    // 簡單的條件判斷
+    if age > 0 {
+        println("Glux 已經誕生了!")
+    }
+}

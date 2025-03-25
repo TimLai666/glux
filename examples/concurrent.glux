@@ -1,0 +1,36 @@
+// 這是一個展示 Glux 併發功能的範例程序
+// 使用 spawn 和 await 關鍵字實現併發操作
+
+// 模擬耗時操作的函數
+fn longTask(name: string, duration: int) -> string {
+    println(`任務 ${name} 開始執行...`)
+    
+    // 這裡應該是 sleep 函數，但在當前實現中我們使用一個空循環來模擬
+    for i in range(0, duration * 100000) {
+        // 空循環，模擬耗時操作
+    }
+    
+    println(`任務 ${name} 執行完成!`)
+    return `任務 ${name} 的結果`
+}
+
+main {
+    println("開始測試併發功能...")
+    
+    // 啟動三個並發任務
+    task1 := spawn longTask("A", 1)
+    task2 := spawn longTask("B", 2)
+    task3 := spawn longTask("C", 3)
+    
+    println("所有任務已經啟動，但還在背景執行...")
+    
+    // 等待第一個任務完成並獲取結果
+    result1 := await task1
+    println(`收到第一個結果: ${result1}`)
+    
+    // 等待剩餘任務完成並獲取結果
+    results := await task2, task3
+    println(`收到剩餘結果: ${results.Item0}, ${results.Item1}`)
+    
+    println("所有任務已完成!")
+} 
