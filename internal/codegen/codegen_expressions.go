@@ -27,6 +27,51 @@ func (g *CodeGenerator) generateStringLiteral(expr *ast.StringLiteral) string {
 	return fmt.Sprintf("%q", expr.Value)
 }
 
+// 生成字符串插值表達式
+func (g *CodeGenerator) generateStringInterpolationExpression(expr *ast.StringInterpolationExpression) string {
+	var parts []string
+	g.imports["fmt"] = ""
+
+	for _, part := range expr.Parts {
+		if strLit, ok := part.(*ast.StringLiteral); ok {
+			// 字符串字面量部分
+			parts = append(parts, fmt.Sprintf("%s", strLit.Value))
+		} else {
+			// 表達式部分，將其轉換為字符串
+			exprCode := g.generateExpression(part)
+			parts = append(parts, fmt.Sprintf("%s", exprCode))
+		}
+	}
+
+	// 使用fmt.Sprintf來連接所有部分
+	if len(parts) == 1 {
+		return fmt.Sprintf("%q", parts[0])
+	}
+
+	// 生成格式字符串和參數列表
+	var fmtParts []string
+	var args []string
+
+	for i, part := range expr.Parts {
+		if _, ok := part.(*ast.StringLiteral); ok {
+			// 字符串字面量部分直接加入格式字符串
+			fmtParts = append(fmtParts, parts[i])
+		} else {
+			// 表達式部分使用占位符和參數
+			fmtParts = append(fmtParts, "%v")
+			args = append(args, parts[i])
+		}
+	}
+
+	fmtStr := strings.Join(fmtParts, "")
+
+	if len(args) == 0 {
+		return fmt.Sprintf("%q", fmtStr)
+	}
+
+	return fmt.Sprintf("fmt.Sprintf(%q, %s)", fmtStr, strings.Join(args, ", "))
+}
+
 // 生成布爾字面量
 func (g *CodeGenerator) generateBooleanLiteral(expr *ast.BooleanLiteral) string {
 	return fmt.Sprintf("%t", expr.Value)
@@ -63,84 +108,73 @@ func (g *CodeGenerator) generateInfixExpression(expr *ast.InfixExpression) strin
 	left := g.generateExpression(expr.Left)
 	right := g.generateExpression(expr.Right)
 
+	// 處理不同的運算符
 	switch expr.Operator {
-	case "+", "-", "*", "/", "%", "==", "!=", "<", ">", "<=", ">=", "&&", "||", "&", "|", "^":
-		// 直接使用Go中相同的運算符
+	case "+", "-", "*", "/", "%", "==", "!=", "<", "<=", ">", ">=", "&&", "||", "&", "|", "^":
+		// 直接映射到Go的運算符
 		return fmt.Sprintf("(%s %s %s)", left, expr.Operator, right)
-	case "=":
-		// 處理賦值運算符
-		return fmt.Sprintf("%s = %s", left, right)
 	case "and":
 		return fmt.Sprintf("(%s && %s)", left, right)
 	case "or":
 		return fmt.Sprintf("(%s || %s)", left, right)
-	case "in":
-		// 使用contains函數
-		return fmt.Sprintf("contains(%s, %s)", right, left)
-	case "**":
-		// 冪運算在 Go 中需要使用 math.Pow
-		g.imports["math"] = ""
-		return fmt.Sprintf("math.Pow(float64(%s), float64(%s))", left, right)
-	case "??":
-		// Null 合併運算符
-		// Go 中沒有直接等效的，使用三元運算符的模擬
-		return fmt.Sprintf("(func() interface{} {\n\tif %s == nil {\n\t\treturn %s\n\t}\n\treturn %s\n}())",
-			left, right, left)
-	case "..":
-		// 範圍運算符
-		g.addError("Range operator (..) needs special handling in context")
-		return fmt.Sprintf("/* ERROR: Range operator needs context */ []int{%s, %s}", left, right)
-	case "<<", ">>":
-		// 位移運算
-		return fmt.Sprintf("(%s %s %s)", left, expr.Operator, right)
+	case "=":
+		// 賦值運算符
+		return fmt.Sprintf("%s = %s", left, right)
 	default:
 		g.addError("Unknown infix operator: %s", expr.Operator)
-		return fmt.Sprintf("/* ERROR: Unknown infix operator: %s */", expr.Operator)
+		return fmt.Sprintf("/* ERROR: Unknown infix operator: %s */ (%s ?? %s)", expr.Operator, left, right)
 	}
+}
+
+// 生成三元運算符表達式
+func (g *CodeGenerator) generateConditionalExpression(expr *ast.ConditionalExpression) string {
+	condition := g.generateExpression(expr.Condition)
+	trueExpr := g.generateExpression(expr.IfTrue)
+	falseExpr := g.generateExpression(expr.IfFalse)
+
+	// Go 沒有三元運算符，所以我們使用一個立即執行的匿名函數
+	tempVar := g.nextTempVar()
+	g.writeLine(fmt.Sprintf("var %s interface{}", tempVar))
+	g.writeLine(fmt.Sprintf("if %s {", condition))
+	g.indentLevel++
+	g.writeLine(fmt.Sprintf("%s = %s", tempVar, trueExpr))
+	g.indentLevel--
+	g.writeLine("} else {")
+	g.indentLevel++
+	g.writeLine(fmt.Sprintf("%s = %s", tempVar, falseExpr))
+	g.indentLevel--
+	g.writeLine("}")
+
+	return tempVar
 }
 
 // 生成函數調用表達式
 func (g *CodeGenerator) generateCallExpression(expr *ast.CallExpression) string {
 	function := g.generateExpression(expr.Function)
 
-	// 處理特殊的內置函數
-	if identExpr, ok := expr.Function.(*ast.IdentifierExpression); ok {
-		switch identExpr.Value {
-		case "print", "println":
-			// 將 print/println 轉換為 fmt.Print/fmt.Println
-			g.imports["fmt"] = ""
-			function = "fmt." + strings.Title(identExpr.Value)
-		case "len", "append", "make", "new", "panic", "recover", "close", "delete", "copy", "cap", "real", "imag", "complex":
-			// 這些是 Go 內置函數，保持不變
-		case "range":
-			// 特殊處理 range 函數
-			if len(expr.Arguments) == 1 {
-				endValue := g.generateExpression(expr.Arguments[0])
-				return fmt.Sprintf("make([]int, %s)", endValue)
-			} else if len(expr.Arguments) == 2 {
-				startValue := g.generateExpression(expr.Arguments[0])
-				endValue := g.generateExpression(expr.Arguments[1])
-				tempVar := g.nextTempVar()
-				g.writeLine(fmt.Sprintf("var %s = make([]int, %s - %s)", tempVar, endValue, startValue))
-				g.writeLine(fmt.Sprintf("for i := range %s {", tempVar))
-				g.indentLevel++
-				g.writeLine(fmt.Sprintf("%s[i] = int(%s) + i", tempVar, startValue))
-				g.indentLevel--
-				g.writeLine("}")
-				return tempVar
-			}
-			// 其他情況使用預設處理
-		}
-	}
+	var args []string
 
-	// 生成參數列表
-	args := []string{}
+	// 處理普通參數
 	for _, arg := range expr.Arguments {
 		args = append(args, g.generateExpression(arg))
 	}
 
-	argsStr := strings.Join(args, ", ")
-	return fmt.Sprintf("%s(%s)", function, argsStr)
+	// 處理具名參數 (Go 不支持具名參數，所以這裡的處理是簡化的)
+	for name, value := range expr.NamedArgs {
+		g.addError("Go does not support named arguments, using positional argument for %s", name)
+		args = append(args, g.generateExpression(value))
+	}
+
+	// 檢查是否為內建函數
+	if ident, ok := expr.Function.(*ast.IdentifierExpression); ok {
+		// 處理println函數
+		if ident.Value == "println" {
+			// 直接使用Go的內建println
+			return fmt.Sprintf("fmt.Println(%s)", strings.Join(args, ", "))
+		}
+	}
+
+	return fmt.Sprintf("%s(%s)", function, strings.Join(args, ", "))
 }
 
 // 生成索引表達式
@@ -156,202 +190,198 @@ func (g *CodeGenerator) generatePropertyExpression(expr *ast.PropertyExpression)
 	object := g.generateExpression(expr.Object)
 	property := expr.Property.Value
 
+	// 確保屬性名稱開頭是大寫的，因為 Go 中只有大寫的字段才能被導出/訪問
+	if len(property) > 0 && property[0] >= 'a' && property[0] <= 'z' {
+		// Go 中不能訪問小寫開頭的字段，這裡我們暫時不進行大寫轉換
+		// 但應該添加一個警告
+		g.addError("Field '%s' starts with lowercase and might not be accessible in Go", property)
+	}
+
 	return fmt.Sprintf("%s.%s", object, property)
 }
 
 // 生成列表字面量
 func (g *CodeGenerator) generateListLiteral(expr *ast.ListLiteral) string {
-	elements := []string{}
+	var elements []string
 
-	for _, elem := range expr.Elements {
-		elements = append(elements, g.generateExpression(elem))
+	for _, element := range expr.Elements {
+		elements = append(elements, g.generateExpression(element))
 	}
 
-	elementsStr := strings.Join(elements, ", ")
-
-	// 如果知道列表元素的類型，可以使用具體類型
-	if len(elements) > 0 {
-		return fmt.Sprintf("[]interface{}{%s}", elementsStr)
+	// 如果列表為空，則返回空切片
+	if len(elements) == 0 {
+		return "[]interface{}{}"
 	}
 
-	return fmt.Sprintf("[]interface{}{%s}", elementsStr)
+	return fmt.Sprintf("[]interface{}{%s}", strings.Join(elements, ", "))
 }
 
 // 生成元組字面量
 func (g *CodeGenerator) generateTupleLiteral(expr *ast.TupleLiteral) string {
-	// Go 沒有原生的元組類型，使用結構體或切片來實現
-	elements := []string{}
+	var elements []string
 
-	for _, elem := range expr.Elements {
-		elements = append(elements, g.generateExpression(elem))
+	for _, element := range expr.Elements {
+		elements = append(elements, g.generateExpression(element))
 	}
 
-	elementsStr := strings.Join(elements, ", ")
+	// Go 沒有內置的元組類型，所以我們使用一個結構體來模擬
+	tupleType := fmt.Sprintf("struct {\n")
+	for fieldIdx := range expr.Elements {
+		tupleType += fmt.Sprintf("\tItem%d interface{}\n", fieldIdx)
+	}
+	tupleType += "}"
 
-	// 使用匿名結構體或切片，根據上下文選擇合適的實現
-	return fmt.Sprintf("[]interface{}{%s}", elementsStr)
+	var fieldValues []string
+	for fieldIdx, elem := range elements {
+		fieldValues = append(fieldValues, fmt.Sprintf("Item%d: %s", fieldIdx, elem))
+	}
+
+	return fmt.Sprintf("%s{%s}", tupleType, strings.Join(fieldValues, ", "))
 }
 
 // 生成映射字面量
 func (g *CodeGenerator) generateMapLiteral(expr *ast.MapLiteral) string {
-	pairs := []string{}
+	var pairs []string
 
 	for key, value := range expr.Pairs {
-		keyCode := g.generateExpression(key)
-		valueCode := g.generateExpression(value)
-		pairs = append(pairs, fmt.Sprintf("%s: %s", keyCode, valueCode))
+		keyStr := g.generateExpression(key)
+		valueStr := g.generateExpression(value)
+		pairs = append(pairs, fmt.Sprintf("%s: %s", keyStr, valueStr))
 	}
 
-	pairsStr := strings.Join(pairs, ", ")
+	// 如果映射為空，則返回空映射
+	if len(pairs) == 0 {
+		return "map[interface{}]interface{}{}"
+	}
 
-	return fmt.Sprintf("map[interface{}]interface{}{%s}", pairsStr)
+	return fmt.Sprintf("map[interface{}]interface{}{%s}", strings.Join(pairs, ", "))
 }
 
 // 生成函數字面量
 func (g *CodeGenerator) generateFunctionLiteral(expr *ast.FunctionLiteral) string {
-	// 處理參數列表
-	params := []string{}
-	for _, p := range expr.Parameters {
-		paramName := g.safeVarName(p.Name.Value)
+	var paramNames []string
+	var paramTypes []string
+
+	// 處理參數
+	for _, param := range expr.Parameters {
+		paramName := g.safeVarName(param.Name.Value)
 		paramType := "interface{}"
 
-		if p.Type != nil {
-			paramType = g.goType(p.Type.Name)
+		if param.Type != nil {
+			paramType = g.goType(param.Type.String())
 		}
 
-		params = append(params, fmt.Sprintf("%s %s", paramName, paramType))
+		paramNames = append(paramNames, paramName)
+		paramTypes = append(paramTypes, paramType)
 	}
-
-	paramsStr := strings.Join(params, ", ")
 
 	// 處理返回類型
 	returnType := "interface{}"
 	if expr.ReturnType != nil {
-		returnType = g.goType(expr.ReturnType.Name)
+		returnType = g.goType(expr.ReturnType.String())
 	}
 
-	// 保存當前函數返回類型並還原
-	prevReturnType := g.currentFuncReturnType
+	// 函數體
+	oldReturnType := g.currentFuncReturnType
 	g.currentFuncReturnType = returnType
 
 	// 生成函數體
-	var bodyBuilder strings.Builder
-	bodyBuilder.WriteString("{\n")
-	g.indentLevel++
+	var bodyBuffer strings.Builder
+	currentBuffer := g.buffer
+	g.buffer = bodyBuffer
 
-	// 處理參數的預設值
-	for _, p := range expr.Parameters {
-		if p.DefaultValue != nil {
-			paramName := g.safeVarName(p.Name.Value)
-			defaultValue := g.generateExpression(p.DefaultValue)
-
-			g.writeLine(fmt.Sprintf("if %s == nil {", paramName))
-			g.indentLevel++
-			g.writeLine(fmt.Sprintf("%s = %s", paramName, defaultValue))
-			g.indentLevel--
-			g.writeLine("}")
-		}
+	for _, s := range expr.Body.Statements {
+		g.generateStatement(s)
 	}
 
-	// 生成函數體
-	for _, stmt := range expr.Body.Statements {
-		g.generateStatement(stmt)
+	bodyContent := g.buffer.String()
+	g.buffer = currentBuffer
+
+	// 恢復上下文
+	g.currentFuncReturnType = oldReturnType
+
+	// 生成函數類型和主體
+	paramDefs := make([]string, len(paramNames))
+	for i := range paramNames {
+		paramDefs[i] = fmt.Sprintf("%s %s", paramNames[i], paramTypes[i])
 	}
 
-	g.indentLevel--
-	bodyBuilder.WriteString(g.buffer.String())
-	bodyBuilder.WriteString("}")
+	funcDef := fmt.Sprintf("func(%s) %s {\n%s\n}", strings.Join(paramDefs, ", "), returnType, bodyContent)
 
-	// 還原返回類型
-	g.currentFuncReturnType = prevReturnType
-
-	// 構建函數字面量
-	return fmt.Sprintf("func(%s) %s %s", paramsStr, returnType, bodyBuilder.String())
+	return funcDef
 }
 
 // 生成結構體字面量
 func (g *CodeGenerator) generateStructLiteral(expr *ast.StructLiteral) string {
-	fields := []string{}
+	var fields []string
 
 	for name, value := range expr.Fields {
-		valueCode := g.generateExpression(value)
-		fields = append(fields, fmt.Sprintf("%s: %s", name, valueCode))
+		valueStr := g.generateExpression(value)
+		fields = append(fields, fmt.Sprintf("%s: %s", name, valueStr))
 	}
 
-	fieldsStr := strings.Join(fields, ", ")
-
-	return fmt.Sprintf("%s{%s}", expr.Type.Value, fieldsStr)
+	return fmt.Sprintf("%s{%s}", expr.Type.Value, strings.Join(fields, ", "))
 }
 
-// 生成條件表達式 (三元運算符)
-func (g *CodeGenerator) generateConditionalExpression(expr *ast.ConditionalExpression) string {
-	// Go 沒有三元運算符，使用 if-else 語句代替
-	tempVar := g.nextTempVar()
-	condition := g.generateExpression(expr.Condition)
-	ifTrue := g.generateExpression(expr.IfTrue)
-	ifFalse := g.generateExpression(expr.IfFalse)
-
-	g.writeLine(fmt.Sprintf("var %s interface{}", tempVar))
-	g.writeLine(fmt.Sprintf("if %s {", condition))
-	g.indentLevel++
-	g.writeLine(fmt.Sprintf("%s = %s", tempVar, ifTrue))
-	g.indentLevel--
-	g.writeLine("} else {")
-	g.indentLevel++
-	g.writeLine(fmt.Sprintf("%s = %s", tempVar, ifFalse))
-	g.indentLevel--
-	g.writeLine("}")
-
-	return tempVar
-}
-
-// 生成 spawn 表達式（用於並發）
+// 生成 spawn 表達式
 func (g *CodeGenerator) generateSpawnExpression(expr *ast.SpawnExpression) string {
-	// spawn 表達式在 Go 中轉換為 goroutine
-	callExpr := expr.Call
-	function := g.generateExpression(callExpr.Function)
+	// 導入 goroutine 相關的包
+	g.imports["sync"] = ""
 
-	args := []string{}
-	for _, arg := range callExpr.Arguments {
-		args = append(args, g.generateExpression(arg))
-	}
+	// 生成異步函數調用代碼
+	call := g.generateCallExpression(expr.Call)
 
-	argsStr := strings.Join(args, ", ")
-	g.writeLine(fmt.Sprintf("go %s(%s)", function, argsStr))
+	// 創建一個 channel 來等待結果
+	resultVarName := g.nextTempVar()
+	channelVarName := g.nextTempVar()
 
-	// 返回一個空的 channel 表示異步執行
-	tempVar := g.nextTempVar()
-	g.writeLine(fmt.Sprintf("var %s = make(chan interface{})", tempVar))
-	return tempVar
+	// 函數返回值的類型
+	resultType := "interface{}"
+
+	// 創建異步調用
+	g.writeLine(fmt.Sprintf("var %s %s", resultVarName, resultType))
+	g.writeLine(fmt.Sprintf("%s := make(chan %s)", channelVarName, resultType))
+	g.writeLine(fmt.Sprintf("go func() {"))
+	g.indentLevel++
+	g.writeLine(fmt.Sprintf("%s <- %s", channelVarName, call))
+	g.indentLevel--
+	g.writeLine(fmt.Sprintf("}()"))
+
+	// 返回 channel，稍後可以使用 await 來獲取結果
+	return channelVarName
 }
 
 // 生成 await 表達式
 func (g *CodeGenerator) generateAwaitExpression(expr *ast.AwaitExpression) string {
-	if len(expr.Futures) == 0 {
-		g.addError("Await expression requires at least one future")
-		return "nil /* ERROR: No futures to await */"
-	}
-
-	// 處理單個 future 的情況
+	// 處理單個 future
 	if len(expr.Futures) == 1 {
-		exprCode := g.generateExpression(expr.Futures[0])
-
-		// 在 Go 中使用 channel 接收結果來模擬 await
-		tempVar := g.nextTempVar()
-		g.writeLine(fmt.Sprintf("var %s = <-%s", tempVar, exprCode))
-		return tempVar
+		future := g.generateExpression(expr.Futures[0])
+		return fmt.Sprintf("<-%s", future)
 	}
 
-	// 處理多個 future 的情況
-	tempVar := g.nextTempVar()
-	g.writeLine(fmt.Sprintf("var %s []interface{}", tempVar))
+	// 處理多個 futures
+	var results []string
 
+	// 為每個 future 創建一個變數來存儲結果
 	for _, future := range expr.Futures {
-		exprCode := g.generateExpression(future)
 		resultVar := g.nextTempVar()
-		g.writeLine(fmt.Sprintf("var %s = <-%s", resultVar, exprCode))
-		g.writeLine(fmt.Sprintf("%s = append(%s, %s)", tempVar, tempVar, resultVar))
+		futureExpr := g.generateExpression(future)
+		g.writeLine(fmt.Sprintf("%s := <-%s", resultVar, futureExpr))
+		results = append(results, resultVar)
 	}
 
-	return tempVar
+	// 如果有多個結果，創建一個結構體來存儲它們
+	tupleType := fmt.Sprintf("struct {\n")
+	for fieldIdx := range results {
+		tupleType += fmt.Sprintf("\tItem%d interface{}\n", fieldIdx)
+	}
+	tupleType += "}"
+
+	// 構建結構體初始化代碼
+	var fieldAssignments []string
+	for fieldIdx, resultVar := range results {
+		fieldAssignments = append(fieldAssignments, fmt.Sprintf("Item%d: %s", fieldIdx, resultVar))
+	}
+
+	return fmt.Sprintf("%s{%s}", tupleType, strings.Join(fieldAssignments, ", "))
 }

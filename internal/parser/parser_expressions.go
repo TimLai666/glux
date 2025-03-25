@@ -47,10 +47,77 @@ func (p *Parser) parseNumberLiteral() ast.Expression {
 
 // parseStringLiteral 解析字符串字面量
 func (p *Parser) parseStringLiteral() ast.Expression {
+	// 檢查是否是插值字符串
+	if p.currentTok.Literal != "" && p.currentTok.Literal[0] == '`' {
+		return p.parseStringInterpolation()
+	}
+
 	return &ast.StringLiteral{
 		Token: p.currentTok,
 		Value: p.currentTok.Literal,
 	}
+}
+
+// parseStringInterpolation 解析字符串插值表達式
+func (p *Parser) parseStringInterpolation() ast.Expression {
+	interpolation := &ast.StringInterpolationExpression{
+		Token: p.currentTok,
+		Parts: []ast.Expression{},
+	}
+
+	// 獲取原始字符串內容，去掉開頭和結尾的反引號
+	rawString := p.currentTok.Literal[1 : len(p.currentTok.Literal)-1]
+
+	// 解析字符串中的插值部分
+	var textStart, textEnd int
+	var insideInterpolation bool
+	var interpolationStart int
+
+	for i := 0; i < len(rawString); i++ {
+		if !insideInterpolation && i < len(rawString)-1 && rawString[i] == '$' && rawString[i+1] == '{' {
+			// 找到插值開始位置
+			textEnd = i
+
+			// 添加前面的文本部分
+			if textEnd > textStart {
+				textPart := &ast.StringLiteral{
+					Token: lexer.Token{Type: lexer.TokenString, Literal: rawString[textStart:textEnd]},
+					Value: rawString[textStart:textEnd],
+				}
+				interpolation.Parts = append(interpolation.Parts, textPart)
+			}
+
+			insideInterpolation = true
+			interpolationStart = i + 2 // 跳過 ${
+			i++                        // 跳過 {
+		} else if insideInterpolation && rawString[i] == '}' {
+			// 找到插值結束位置
+			interpolationExpr := rawString[interpolationStart:i]
+
+			// 使用臨時字符串解析插值表達式
+			tokens := lexer.Lex(interpolationExpr)
+			subParser := New(tokens)
+			expr := subParser.parseExpression(LOWEST)
+
+			if expr != nil {
+				interpolation.Parts = append(interpolation.Parts, expr)
+			}
+
+			insideInterpolation = false
+			textStart = i + 1
+		}
+	}
+
+	// 添加最後一部分文本（如果有）
+	if !insideInterpolation && textStart < len(rawString) {
+		textPart := &ast.StringLiteral{
+			Token: lexer.Token{Type: lexer.TokenString, Literal: rawString[textStart:]},
+			Value: rawString[textStart:],
+		}
+		interpolation.Parts = append(interpolation.Parts, textPart)
+	}
+
+	return interpolation
 }
 
 // parseBooleanLiteral 解析布爾字面量

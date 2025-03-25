@@ -227,6 +227,8 @@ func (g *CodeGenerator) generateExpression(expr ast.Expression) string {
 		return g.generateFloatLiteral(e)
 	case *ast.StringLiteral:
 		return g.generateStringLiteral(e)
+	case *ast.StringInterpolationExpression:
+		return g.generateStringInterpolationExpression(e)
 	case *ast.BooleanLiteral:
 		return g.generateBooleanLiteral(e)
 	case *ast.NullLiteral:

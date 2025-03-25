@@ -1,6 +1,7 @@
 package ast
 
 import (
+	"bytes"
 	"fmt"
 	"glux/internal/lexer"
 	"strings"
@@ -88,6 +89,33 @@ type StringLiteral struct {
 func (sl *StringLiteral) expressionNode()      {}
 func (sl *StringLiteral) TokenLiteral() string { return sl.Token.Literal }
 func (sl *StringLiteral) String() string       { return fmt.Sprintf("%q", sl.Value) }
+
+// StringInterpolationExpression 表示帶有變量插值的字符串表達式
+// 例如: `Hello, ${name}!`
+type StringInterpolationExpression struct {
+	Token lexer.Token  // 開始標記
+	Parts []Expression // 字符串各部分：字面量和插值表達式的混合
+}
+
+func (sie *StringInterpolationExpression) expressionNode()      {}
+func (sie *StringInterpolationExpression) TokenLiteral() string { return sie.Token.Literal }
+func (sie *StringInterpolationExpression) String() string {
+	var out bytes.Buffer
+	out.WriteString("`")
+
+	for _, part := range sie.Parts {
+		if strLit, ok := part.(*StringLiteral); ok {
+			out.WriteString(strLit.Value)
+		} else {
+			out.WriteString("${")
+			out.WriteString(part.String())
+			out.WriteString("}")
+		}
+	}
+
+	out.WriteString("`")
+	return out.String()
+}
 
 // BooleanLiteral 表示布爾字面值
 type BooleanLiteral struct {

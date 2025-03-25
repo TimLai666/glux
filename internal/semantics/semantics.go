@@ -445,6 +445,16 @@ func (tc *TypeChecker) checkExpression(expr ast.Expression) Type {
 // 簡單實現一些初步的語意檢查方法
 
 func (tc *TypeChecker) checkVarStatement(stmt *ast.VarStatement) Type {
+	if stmt == nil {
+		tc.addError("nil VarStatement encountered")
+		return &ErrorType{}
+	}
+
+	if stmt.Value == nil {
+		tc.addError("Variable declaration requires an initial value")
+		return &ErrorType{}
+	}
+
 	valueType := tc.checkExpression(stmt.Value)
 
 	declaredType := valueType

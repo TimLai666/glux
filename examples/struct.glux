@@ -1,0 +1,50 @@
+// 這是一個展示 Glux 結構體和方法的範例程序
+
+// 定義一個基本的 Person 結構體
+struct Person {
+    Name: string,
+    age: int,
+}
+
+// 為 Person 添加方法
+fn (p Person) greet() {
+    println(`Hello, my name is ${p.Name} and I am ${p.age} years old.`)
+}
+
+fn (p Person) isAdult() -> bool {
+    return p.age >= 18
+}
+
+// 定義一個繼承 Person 的 Employee 結構體
+struct Employee extends Person {
+    override Name: string,  // 明確覆寫父類中的 Name 屬性
+    employeeId: int,
+    department: string,
+}
+
+// 為 Employee 添加方法
+fn (e Employee) introduce() {
+    e.greet()  // 調用繼承的方法
+    println(`I work in the ${e.department} department with employee ID ${e.employeeId}.`)
+}
+
+main {
+    // 創建 Person 實例
+    person := Person { Name: "Alice", age: 30 }
+    person.greet()
+    
+    if person.isAdult() {
+        println("Alice is an adult.")
+    }
+    
+    // 創建 Employee 實例
+    employee := Employee { 
+        Name: "Bob", 
+        age: 25, 
+        employeeId: 12345, 
+        department: "Engineering" 
+    }
+    
+    // 調用方法
+    employee.introduce()
+} 
