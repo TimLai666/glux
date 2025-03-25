@@ -611,3 +611,26 @@ func (p *Parser) parseImportStatement() *ast.ImportStatement {
 
 	return stmt
 }
+
+// parseMainBlockStatement 解析 main 區塊
+func (p *Parser) parseMainBlockStatement() *ast.FunctionDefinition {
+	// 創建一個函數定義，名稱為 main
+	stmt := &ast.FunctionDefinition{
+		Token: p.currentTok,
+		Name: &ast.IdentifierExpression{
+			Token: p.currentTok,
+			Value: "main",
+		},
+		Parameters: []*ast.FunctionParameter{}, // 空參數列表
+	}
+
+	// 接下來應該是左大括號 {
+	if !p.expectPeek(lexer.TokenLBrace) {
+		return nil
+	}
+
+	// 解析函數體
+	stmt.Body = p.parseBlockStatement()
+
+	return stmt
+}

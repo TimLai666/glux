@@ -352,7 +352,7 @@ func Check(program *ast.Program) error {
 		for _, err := range checker.errors {
 			errorMsg += "- " + err + "\n"
 		}
-		return fmt.Errorf(errorMsg)
+		return fmt.Errorf("%s", errorMsg)
 	}
 
 	return nil

@@ -528,23 +528,18 @@ func (p *Parser) parseAssignmentExpression(left ast.Expression) ast.Expression {
 		return nil
 	}
 
-	// 創建一個表達式語句來包裝賦值操作
+	// 創建一個中綴表達式（而不是賦值語句）
 	token := p.currentTok
 	p.nextToken() // 跳過 '='
 	value := p.parseExpression(LOWEST)
 
-	// 創建賦值的表達式語句
-	exprStmt := &ast.ExpressionStatement{
-		Token: token,
-		Expression: &ast.InfixExpression{
-			Token:    token,
-			Left:     left,
-			Operator: "=",
-			Right:    value,
-		},
+	// 返回中綴表達式
+	return &ast.InfixExpression{
+		Token:    token,
+		Operator: token.Literal,
+		Left:     left,
+		Right:    value,
 	}
-
-	return exprStmt.Expression
 }
 
 // parseSpawnExpression 解析 spawn 表達式

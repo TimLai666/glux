@@ -442,15 +442,15 @@ func lookupIdent(ident string) TokenType {
 	return TokenIdent
 }
 
-// Lex 將源碼轉換為 token 序列
+// Lex 對源代碼進行詞法分析，返回全部語法標記
 func Lex(input string) []Token {
 	l := NewLexer(input)
 	var tokens []Token
 
 	for {
-		tok := l.NextToken()
-		tokens = append(tokens, tok)
-		if tok.Type == TokenEOF {
+		token := l.NextToken()
+		tokens = append(tokens, token)
+		if token.Type == TokenEOF {
 			break
 		}
 	}

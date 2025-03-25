@@ -63,50 +63,39 @@ func (g *CodeGenerator) generateInfixExpression(expr *ast.InfixExpression) strin
 	left := g.generateExpression(expr.Left)
 	right := g.generateExpression(expr.Right)
 
-	// 處理不同的中綴運算符
 	switch expr.Operator {
-	case "+", "-", "*", "/", "==", "!=", ">", "<", ">=", "<=", "&&", "||":
-		// 這些運算符在 Go 中直接支持
+	case "+", "-", "*", "/", "%", "==", "!=", "<", ">", "<=", ">=", "&&", "||", "&", "|", "^":
+		// 直接使用Go中相同的運算符
 		return fmt.Sprintf("(%s %s %s)", left, expr.Operator, right)
-	case "%":
-		// 取模運算
-		return fmt.Sprintf("(%s %% %s)", left, right)
+	case "=":
+		// 處理賦值運算符
+		return fmt.Sprintf("%s = %s", left, right)
+	case "and":
+		return fmt.Sprintf("(%s && %s)", left, right)
+	case "or":
+		return fmt.Sprintf("(%s || %s)", left, right)
+	case "in":
+		// 使用contains函數
+		return fmt.Sprintf("contains(%s, %s)", right, left)
 	case "**":
 		// 冪運算在 Go 中需要使用 math.Pow
 		g.imports["math"] = ""
-		return fmt.Sprintf("math.Pow(%s, %s)", left, right)
+		return fmt.Sprintf("math.Pow(float64(%s), float64(%s))", left, right)
 	case "??":
 		// Null 合併運算符
-		tempVar := g.nextTempVar()
-		g.writeLine(fmt.Sprintf("var %s interface{} = %s", tempVar, left))
-		g.writeLine(fmt.Sprintf("if %s == nil {", tempVar))
-		g.indentLevel++
-		g.writeLine(fmt.Sprintf("%s = %s", tempVar, right))
-		g.indentLevel--
-		g.writeLine("}")
-		return tempVar
+		// Go 中沒有直接等效的，使用三元運算符的模擬
+		return fmt.Sprintf("(func() interface{} {\n\tif %s == nil {\n\t\treturn %s\n\t}\n\treturn %s\n}())",
+			left, right, left)
 	case "..":
-		// 範圍運算符，可能需要在上下文中處理
+		// 範圍運算符
 		g.addError("Range operator (..) needs special handling in context")
 		return fmt.Sprintf("/* ERROR: Range operator needs context */ []int{%s, %s}", left, right)
-	case "&":
-		// 位元與
-		return fmt.Sprintf("(%s & %s)", left, right)
-	case "|":
-		// 位元或
-		return fmt.Sprintf("(%s | %s)", left, right)
-	case "^":
-		// 位元異或
-		return fmt.Sprintf("(%s ^ %s)", left, right)
-	case "<<":
-		// 左移
-		return fmt.Sprintf("(%s << %s)", left, right)
-	case ">>":
-		// 右移
-		return fmt.Sprintf("(%s >> %s)", left, right)
+	case "<<", ">>":
+		// 位移運算
+		return fmt.Sprintf("(%s %s %s)", left, expr.Operator, right)
 	default:
 		g.addError("Unknown infix operator: %s", expr.Operator)
-		return fmt.Sprintf("/* ERROR: Unknown infix operator: %s */ (%s ? %s)", expr.Operator, left, right)
+		return fmt.Sprintf("/* ERROR: Unknown infix operator: %s */", expr.Operator)
 	}
 }
 

@@ -42,12 +42,24 @@ func Generate(node *ast.Program) (string, error) {
 
 // generate 是內部方法，實際進行代碼生成
 func (g *CodeGenerator) generate(node *ast.Program) (string, error) {
-	// 生成包聲明
-	g.writeLine("package main")
-	g.writeLine("")
+	var codeBuffer strings.Builder
+	var mainLevelStatements []ast.Statement
+	var otherStatements []ast.Statement
 
-	// 處理程序中的所有語句
+	// 分離頂層表達式語句和其他語句
 	for _, stmt := range node.Statements {
+		if _, ok := stmt.(*ast.ExpressionStatement); ok {
+			mainLevelStatements = append(mainLevelStatements, stmt)
+		} else {
+			otherStatements = append(otherStatements, stmt)
+		}
+	}
+
+	// 生成包聲明
+	codeBuffer.WriteString("package main\n\n")
+
+	// 處理非表達式的頂層語句（變數聲明、函數定義等）
+	for _, stmt := range otherStatements {
 		g.generateStatement(stmt)
 	}
 
@@ -63,24 +75,19 @@ func (g *CodeGenerator) generate(node *ast.Program) (string, error) {
 
 		g.indentLevel--
 		g.writeLine("}")
-	}
+	} else if len(mainLevelStatements) > 0 {
+		// 如果有頂層表達式語句，創建main函數包含它們
+		g.writeLine("")
+		g.writeLine("func main() {")
+		g.indentLevel++
 
-	// 如果沒有 main 區塊，但這是一個入口檔案，添加一個空的 main 函數
-	if node.MainBlock == nil {
-		// 檢查是否有其他頂層語句，如果有則需要 main 函數
-		hasTopLevelStatements := false
-		for _, stmt := range node.Statements {
-			switch stmt.(type) {
-			case *ast.VarStatement, *ast.ConstStatement, *ast.ExpressionStatement:
-				hasTopLevelStatements = true
-			}
+		// 將頂層的表達式語句移到main函數中
+		for _, stmt := range mainLevelStatements {
+			g.generateStatement(stmt)
 		}
 
-		if hasTopLevelStatements {
-			g.writeLine("")
-			g.writeLine("func main() {")
-			g.writeLine("}")
-		}
+		g.indentLevel--
+		g.writeLine("}")
 	}
 
 	// 處理導入語句
@@ -95,8 +102,8 @@ func (g *CodeGenerator) generate(node *ast.Program) (string, error) {
 		return "", fmt.Errorf("%s", errorMsg)
 	}
 
-	// 返回生成的代碼
-	return importBlock + g.buffer.String(), nil
+	// 返回生成的代碼，按正確順序組合
+	return codeBuffer.String() + importBlock + g.buffer.String(), nil
 }
 
 // 生成導入語句
@@ -204,8 +211,6 @@ func (g *CodeGenerator) generateStatement(stmt ast.Statement) {
 		g.generateUnsafeBlockStatement(s)
 	case *ast.ImportStatement:
 		g.generateImportStatement(s)
-	case *ast.AssignmentStatement:
-		g.generateAssignmentStatement(s)
 	default:
 		g.addError("Unknown statement type: %T", stmt)
 	}

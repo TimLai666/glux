@@ -13,7 +13,7 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
-func main() {
+func run() {
 	app := &cli.App{
 		Name:  "gluxc",
 		Usage: "Compile Glux source code into Go code",
@@ -76,4 +76,8 @@ func main() {
 	if err := app.Run(os.Args); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func main() {
+	run()
 }

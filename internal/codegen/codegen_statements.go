@@ -376,17 +376,18 @@ func (g *CodeGenerator) generateUnsafeBlockStatement(stmt *ast.UnsafeBlockStatem
 
 // 生成導入語句
 func (g *CodeGenerator) generateImportStatement(stmt *ast.ImportStatement) {
-	if stmt.Path != nil {
-		// 單文件導入
-		path := strings.Trim(stmt.Path.Value, "\"'")
+	// 簡單導入，例如：import "math"
+	if stmt.Path != nil && stmt.Source == nil {
+		path := stmt.Path.Value
 		g.imports[path] = ""
-	} else if stmt.Source != nil {
-		// 從特定文件導入多個項目
-		source := strings.Trim(stmt.Source.Value, "\"'")
+		return
+	}
 
-		// 生成一個別名，避免衝突
-		alias := fmt.Sprintf("glux_%s", strings.Replace(source, "/", "_", -1))
-		g.imports[source] = alias
+	// 從特定文件導入多個項目，例如：import { sin, cos } from "math"
+	if stmt.Source != nil && stmt.Items != nil {
+		path := stmt.Source.Value
+		alias := fmt.Sprintf("_import_%s", strings.Replace(path, "/", "_", -1))
+		g.imports[path] = alias
 
 		// 在 Go 中沒有直接等效的選擇性導入，但我們可以創建別名
 		for _, item := range stmt.Items {
@@ -394,12 +395,4 @@ func (g *CodeGenerator) generateImportStatement(stmt *ast.ImportStatement) {
 			g.writeLine(fmt.Sprintf("var %s = %s.%s", itemName, alias, itemName))
 		}
 	}
-}
-
-// 生成賦值語句
-func (g *CodeGenerator) generateAssignmentStatement(stmt *ast.AssignmentStatement) {
-	leftCode := g.generateExpression(stmt.Left)
-	rightCode := g.generateExpression(stmt.Value)
-
-	g.writeLine(fmt.Sprintf("%s = %s", leftCode, rightCode))
 }

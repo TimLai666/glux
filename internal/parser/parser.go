@@ -216,7 +216,13 @@ func (p *Parser) ParseProgram() *ast.Program {
 	for !p.curTokenIs(lexer.TokenEOF) {
 		stmt := p.parseStatement()
 		if stmt != nil {
-			program.Statements = append(program.Statements, stmt)
+			// 檢查是否是main區塊
+			if mainFunc, ok := stmt.(*ast.FunctionDefinition); ok && mainFunc != nil &&
+				mainFunc.Name != nil && mainFunc.Name.Value == "main" && mainFunc.Receiver == nil {
+				program.MainBlock = mainFunc.Body
+			} else {
+				program.Statements = append(program.Statements, stmt)
+			}
 		}
 		p.nextToken()
 	}
@@ -249,6 +255,12 @@ func (p *Parser) parseStatement() ast.Statement {
 		return p.parseUnsafeBlockStatement()
 	case lexer.TokenImport:
 		return p.parseImportStatement()
+	case lexer.TokenIdent:
+		// 特殊處理 main 區塊
+		if p.currentTok.Literal == "main" && p.peekTokenIs(lexer.TokenLBrace) {
+			return p.parseMainBlockStatement()
+		}
+		fallthrough
 	default:
 		return p.parseExpressionStatement()
 	}

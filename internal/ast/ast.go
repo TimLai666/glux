@@ -237,6 +237,8 @@ func (as *AssignmentStatement) String() string {
 	return fmt.Sprintf("%s = %s\n", as.Left.String(), as.Value.String())
 }
 
+func (as *AssignmentStatement) expressionNode() {}
+
 // ReturnStatement 表示 return 語句
 type ReturnStatement struct {
 	Token lexer.Token

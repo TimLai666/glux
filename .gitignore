@@ -1,2 +1,4 @@
 *.ll
 __pycache__
+*.exe
+output
